@@ -1,0 +1,8 @@
+{
+  "cart_mass": 10.47197551196598,
+  "pole_mass": 5.018591641363306,
+  "pole_inertia_about_y": 0.1887497668730885,
+  "pole_half_length": 0.3000004166663773,
+  "pole_length": 0.6000008333327546,
+  "gravity": 9.81
+}
