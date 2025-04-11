@@ -4,5 +4,29 @@
   "pole_inertia_about_y": 0.1887497668730885,
   "pole_half_length": 0.3000004166663773,
   "pole_length": 0.6000008333327546,
-  "gravity": 9.81
+  "gravity": 9.81,
+  "state_bounds": [
+    [
+      -Infinity,
+      Infinity
+    ],
+    [
+      -Infinity,
+      Infinity
+    ],
+    [
+      -Infinity,
+      Infinity
+    ],
+    [
+      -Infinity,
+      Infinity
+    ]
+  ],
+  "control_bounds": [
+    [
+      -3.0,
+      3.0
+    ]
+  ]
 }
