@@ -73,6 +73,8 @@ def pendulum_dynamics(x: ca.SX, u: ca.SX, dt: float, params: Dict[str, Any]) -> 
     )
 
     # Solve for the accelerations: [x_ddot, theta_ddot]
+    # ca.solve solves the linear system inertia_matrix * accelerations = force_vector:
+    # https://web.casadi.org/docs/#linear-algebra
     accelerations = ca.solve(inertia_matrix, force_vector)
     x_ddot = accelerations[0]
     theta_ddot = accelerations[1]
