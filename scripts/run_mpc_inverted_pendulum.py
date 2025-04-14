@@ -1,5 +1,7 @@
 import sys
 from pathlib import Path
+import matplotlib.animation as animation
+from matplotlib.animation import FuncAnimation
 
 # Add the project root to the Python path
 project_root = str(Path(__file__).parent.parent)
@@ -14,6 +16,102 @@ import matplotlib.pyplot as plt
 
 from src.algorithms.classic.mpc_controller import MPCController
 
+def create_animated_diagnostics(history, episode=0):
+    """
+    Create an animated plot showing the evolution of states, forecasts, and controls over time.
+    """
+    # Create figure with subplots
+    fig, axs = plt.subplots(3, 1, figsize=(12, 12))
+    
+    # Set up the plots
+    state_labels = ["Cart Position (m)", "Pole Angle (rad)", "Cart Velocity (m/s)", "Pole Angular Velocity (rad/s)"]
+    colors = ['b', 'g', 'r', 'c']
+    
+    # Initialize lines for actual states
+    actual_lines = []
+    for i in range(4):
+        line, = axs[0].plot([], [], color=colors[i], label=f'Actual {state_labels[i]}')
+        actual_lines.append(line)
+    
+    # Initialize lines for forecasts
+    forecast_lines = []
+    for i in range(4):
+        line, = axs[0].plot([], [], '--', color=colors[i], alpha=0.5, label=f'Forecast {state_labels[i]}')
+        forecast_lines.append(line)
+    
+    # Initialize control lines
+    actual_control, = axs[1].plot([], [], 'b-', label='Actual Control')
+    forecast_control, = axs[1].plot([], [], 'b--', alpha=0.5, label='Forecast Control')
+    
+    # Initialize cost and constraint lines
+    cost_line, = axs[2].plot([], [], 'b-', label='Cost')
+    constraint_line, = axs[2].plot([], [], 'r-', label='Constraint Violation')
+    
+    # Set up axes
+    axs[0].set_title(f"Episode {episode}: Environment States")
+    axs[0].set_xlabel("Timestep")
+    axs[0].set_ylabel("State Value")
+    axs[0].grid(True)
+    axs[0].legend()
+    
+    axs[1].set_title("Control Input")
+    axs[1].set_xlabel("Timestep")
+    axs[1].set_ylabel("Force (N)")
+    axs[1].grid(True)
+    axs[1].legend()
+    
+    axs[2].set_title("Cost and Constraint Violation")
+    axs[2].set_xlabel("Timestep")
+    axs[2].set_ylabel("Value")
+    axs[2].grid(True)
+    axs[2].legend()
+    
+    # Pre-compute axis limits
+    all_states = np.array([step["obs"] for step in history])
+    all_controls = np.array([step["u_next"] for step in history])
+    all_costs = np.array([step["cost"] for step in history])
+    all_constraints = np.array([step["constraint_violation"] for step in history])
+    
+    # Set fixed axis limits
+    axs[0].set_xlim(0, len(history))
+    axs[0].set_ylim(all_states.min() - 0.1, all_states.max() + 0.1)
+    
+    axs[1].set_xlim(0, len(history))
+    axs[1].set_ylim(all_controls.min() - 0.1, all_controls.max() + 0.1)
+    
+    axs[2].set_xlim(0, len(history))
+    axs[2].set_ylim(min(all_costs.min(), all_constraints.min()) - 0.1, 
+                   max(all_costs.max(), all_constraints.max()) + 0.1)
+    
+    # Animation update function
+    def update(frame):
+        # Update actual state lines
+        time_indices = np.arange(frame + 1)
+        for i in range(4):
+            actual_lines[i].set_data(time_indices, [step["obs"][i] for step in history[:frame+1]])
+        
+        # Update forecast lines
+        if frame < len(history):
+            forecast_times = np.arange(frame, frame + history[frame]["X_sol"].shape[1])
+            for i in range(4):
+                forecast_lines[i].set_data(forecast_times, history[frame]["X_sol"][i, :])
+        
+        # Update control lines
+        actual_control.set_data(time_indices, [step["u_next"] for step in history[:frame+1]])
+        if frame < len(history):
+            forecast_control.set_data(forecast_times[:-1], history[frame]["U_sol"][0, :])
+        
+        # Update cost and constraint lines
+        cost_line.set_data(time_indices, [step["cost"] for step in history[:frame+1]])
+        constraint_line.set_data(time_indices, [step["constraint_violation"] for step in history[:frame+1]])
+        
+        return actual_lines + forecast_lines + [actual_control, forecast_control, cost_line, constraint_line]
+    
+    # Create animation
+    anim = FuncAnimation(fig, update, frames=len(history), interval=200, blit=True)
+    
+    return anim
+
 def run_mpc_with_diagnostics(num_episodes=1, max_steps=200, render_mode=None):
     """
     Run the InvertedPendulum-v4 environment with your MPCController,
@@ -23,8 +121,8 @@ def run_mpc_with_diagnostics(num_episodes=1, max_steps=200, render_mode=None):
     # Create the environment with optional video-friendly render mode
     env = gym.make("InvertedPendulum-v4", render_mode=render_mode)
     controller = MPCController(
-        N=15,
-        dt=0.01,  # ensure this is consistent with env dt, if you rely on real-time
+        N=10,
+        dt=0.002,  # ensure this is consistent with env dt, if you rely on real-time
         param_path="../src/environments/inverted_pendulum_params.json"
     )
 
@@ -42,6 +140,12 @@ def run_mpc_with_diagnostics(num_episodes=1, max_steps=200, render_mode=None):
             U_sol = solver_outputs["U_solution"]  # shape (1, N)
             u_next = solver_outputs["u_next"]     # float
 
+            # Print MPC diagnostics
+            print(f"\nStep {step}:")
+            print(f"Cost: {solver_outputs['cost']:.2f}")
+            print(f"Constraint violation: {solver_outputs['constraint_violation']:.2e}")
+            print(f"Max control in horizon: {np.max(np.abs(U_sol)):.2f}")
+
             # 2) Step environment
             #   Gym expects the action as e.g. [u_next], ensuring shape (1,)
             obs_next, reward, done, truncated, info = env.step([u_next])
@@ -56,18 +160,24 @@ def run_mpc_with_diagnostics(num_episodes=1, max_steps=200, render_mode=None):
                 "u_next": u_next,     # the immediate control
                 "reward": reward,
                 "done": done,
-                "truncated": truncated
+                "truncated": truncated,
+                "cost": solver_outputs["cost"],
+                "constraint_violation": solver_outputs["constraint_violation"]
             }
             history.append(step_data)
 
             obs = obs_next
             if done or truncated:
-                print(f"[Episode {episode}] Finished in {step+1} steps, total reward so far = "
+                print(f"\n[Episode {episode}] Finished in {step+1} steps, total reward = "
                       f"{sum(d['reward'] for d in history):.2f}")
                 break
 
         # End of episode, do some plotting
         plot_diagnostics(history, episode=episode)
+
+        # Create and show animated diagnostics
+        anim = create_animated_diagnostics(history, episode)
+        plt.show()
 
     env.close()
 
@@ -78,6 +188,7 @@ def plot_diagnostics(history, episode=0):
     1) Environment states over time
     2) MPC horizon predictions at each step
     3) Control input over time
+    4) Cost and constraint violation over time
     """
 
     # We'll assume the environment's state is 4D, and your X_sol is 4 x (N+1).
@@ -87,35 +198,56 @@ def plot_diagnostics(history, episode=0):
     env_states = np.array([step["obs"] for step in history])  # shape (steps, 4)
     # The immediate controls
     controls = np.array([step["u_next"] for step in history]) # shape (steps,)
+    # Costs and constraint violations
+    costs = np.array([step["cost"] for step in history])
+    constraint_violations = np.array([step["constraint_violation"] for step in history])
 
-    # 1) Plot environment states
-    fig, ax = plt.subplots(nrows=2, ncols=1, figsize=(8, 8))
-    # top subplot: environment states
+    # Create a figure with 3 subplots
+    fig, axs = plt.subplots(3, 1, figsize=(12, 12))
+
+    # 1) Plot environment states with better labels
+    state_labels = ["Cart Position (m)", "Pole Angle (rad)", "Cart Velocity (m/s)", "Pole Angular Velocity (rad/s)"]
     for i in range(env_states.shape[1]):
-        ax[0].plot(time_indices, env_states[:, i], label=f"State {i}")
+        axs[0].plot(time_indices, env_states[:, i], label=state_labels[i])
 
-    ax[0].set_title(f"Episode {episode}: Environment States")
-    ax[0].set_xlabel("Timestep")
-    ax[0].set_ylabel("State Value")
-    ax[0].legend()
+    axs[0].set_title(f"Episode {episode}: Environment States")
+    axs[0].set_xlabel("Timestep")
+    axs[0].set_ylabel("State Value")
+    axs[0].legend()
+    axs[0].grid(True)
 
     # Overplot horizon predictions as dotted lines
-    # E.g. at each step, we have a horizon X_sol shape (4, N+1).
-    # We'll shift the time axis for plotting the horizon into the future.
     for step_i, data in enumerate(history):
         X_sol = data["X_sol"]  # shape (4, N+1)
-        # We'll create a separate time axis offset by 'step_i' for the horizon
         horizon_times = step_i + np.arange(X_sol.shape[1])
         for i in range(X_sol.shape[0]):
-            ax[0].plot(horizon_times, X_sol[i, :], linestyle="dotted", alpha=0.2)
+            axs[0].plot(horizon_times, X_sol[i, :], linestyle="dotted", alpha=0.2)
 
     # 2) Plot the control input over time
-    ax[1].plot(time_indices, controls, marker='o')
-    ax[1].set_title("MPC Control Input Over Time")
-    ax[1].set_xlabel("Timestep")
-    ax[1].set_ylabel("Action (u)")
-    # Possibly also show predicted controls? U_sol at each step_i, shape (1, N).
-    # We'll omit for simplicity, or show it similarly as dotted lines.
+    axs[1].plot(time_indices, controls, marker='o')
+    axs[1].set_title("MPC Control Input Over Time")
+    axs[1].set_xlabel("Timestep")
+    axs[1].set_ylabel("Force (N)")
+    axs[1].grid(True)
+
+    # 3) Plot cost and constraint violation
+    axs[2].plot(time_indices, costs, 'b-', label='Cost')
+    axs[2].set_ylabel('Cost', color='b')
+    axs[2].tick_params(axis='y', labelcolor='b')
+    
+    ax2 = axs[2].twinx()
+    ax2.plot(time_indices, constraint_violations, 'r-', label='Constraint Violation')
+    ax2.set_ylabel('Constraint Violation', color='r')
+    ax2.tick_params(axis='y', labelcolor='r')
+    
+    axs[2].set_title("MPC Cost and Constraint Violation")
+    axs[2].set_xlabel("Timestep")
+    axs[2].grid(True)
+
+    # Add legends
+    lines1, labels1 = axs[2].get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    axs[2].legend(lines1 + lines2, labels1 + labels2, loc='upper right')
 
     fig.tight_layout()
     plt.show()
