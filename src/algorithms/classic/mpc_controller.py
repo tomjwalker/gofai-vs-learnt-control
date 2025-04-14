@@ -225,7 +225,6 @@ class MPCController:
         X_guess[:, :-1] = self.X_prev[:, 1:]  # Shift everything left
         X_guess[:, -1] = self.X_prev[:, -1]  # Replicate last column
         # override X[:, 0] with x0
-        x0 = x0.reshape(-1, 1)
         X_guess[:, 0] = x0
 
         # Warm start guess for U

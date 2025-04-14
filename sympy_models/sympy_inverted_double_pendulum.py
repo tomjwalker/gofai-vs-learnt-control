@@ -1,334 +1,525 @@
+"""
+Symbolic Derivation and LaTeX Report Generation for Double Pendulum on a Cart.
+
+Purpose:
+--------
+This script automates the derivation of the equations of motion (EoM) for a
+classic double inverted pendulum mounted on a horizontally moving cart. It uses
+the Lagrangian method of analytical mechanics and performs the symbolic
+computations using the SymPy library.
+
+The primary output is a nicely formatted PDF report, generated via LaTeX (using
+the PyLaTeX library), detailing each step of the derivation process, including:
+- System setup (parameters, coordinates)
+- Kinematic calculations (positions, velocities)
+- Formulation of Kinetic (T) and Potential (V) energies
+- Construction of the Lagrangian (L = T - V)
+- Application of the Euler-Lagrange equations
+- Extraction of the system's Mass Matrix (M), Coriolis/Centrifugal/Gravity
+  vector (C*dq + G)
+- Solution for the generalized accelerations (q_ddot = M^-1 * (Tau - (C*dq + G)))
+
+Optionally, it can substitute parameters for uniform rods and display those
+results.
+
+Methodology:
+------------
+1.  **Symbolic Representation:** SymPy is used to define system parameters
+    (masses, lengths, inertia, etc.) and generalized coordinates (x, theta1,
+    theta2) as symbolic variables and functions of time.
+2.  **Lagrangian Mechanics:** The script follows the standard Lagrangian workflow:
+    - Define positions and calculate velocities of relevant points/bodies.
+    - Compute total kinetic energy (T) and potential energy (V).
+    - Form the Lagrangian L = T - V.
+    - Systematically apply the Euler-Lagrange equations:
+      d/dt(dL/d(q_dot)) - dL/dq = Q
+      to obtain the dynamic equations.
+    - Q represents the generalized forces (only the cart force 'U' in this case).
+3.  **Equation Solving:** The resulting second-order differential equations are
+    manipulated symbolically to isolate the second derivatives (accelerations).
+    This is done by identifying the Mass Matrix (M) and the vector of remaining
+    terms (C*dq + G) and solving the system M*q_ddot = Tau - (C*dq + G).
+4.  **Report Generation:** PyLaTeX is used to programmatically build a LaTeX
+    document (`.tex` file). SymPy's `latex()` function converts symbolic
+    expressions into LaTeX math strings, which are embedded in the document.
+5.  **PDF Compilation:** If a LaTeX distribution is found, the script calls
+    `pdflatex` via a subprocess to compile the `.tex` file into a PDF report.
+
+Key Libraries:
+--------------
+- `sympy`: For symbolic mathematics (calculus, algebra, solving).
+- `pylatex`: For programmatic generation of `.tex` files.
+- `subprocess`, `os`, `platform`, `shutil`: Standard libraries used for
+  checking/calling the external LaTeX compiler and opening the PDF.
+
+Prerequisites:
+--------------
+- Python 3.x
+- SymPy library (`pip install sympy`)
+- PyLaTeX library (`pip install pylatex`)
+- **A full LaTeX distribution:** Must be installed separately (e.g., TeX Live
+  for Linux/macOS/Windows, or MiKTeX for Windows). The `pdflatex` executable
+  must be in the system's PATH for automatic PDF compilation.
+
+Configuration:
+--------------
+Several constants near the top of the script control its behavior:
+- `FILENAME`: Base name for the output `.tex` and `.pdf` files.
+- `INCLUDE_UNIFORM_CASE`: Set to `True` to add a section with results assuming
+  uniform rods (substitutes d1=l1/2, d2=l2/2).
+- `COMPILE_PDF`: Set to `True` to attempt PDF compilation using `pdflatex`.
+  Requires LaTeX to be installed. If `False`, only the `.tex` file is generated.
+- `CLEAN_TEX`: Set to `True` to remove auxiliary LaTeX files (`.aux`, `.log`,
+  `.toc`) and the `.tex` file *after* successful PDF compilation. Set to `False`
+  to keep the `.tex` source for inspection or manual compilation.
+
+Usage:
+------
+Run the script from the command line:
+```bash
+python <script_name>.py
+```
+
+"""
+
+
 import sympy as sp
-from sympy import sin, cos, Matrix # Use SymPy's Matrix
-# Configure printing for console and LaTeX output
-# derivative_brackets=False helps avoid d/dt{} notation sometimes
-# use_latex='mathjax' or similar can influence output style
+from sympy import sin, cos, Matrix
 sp.init_printing(use_unicode=True, use_latex='mathjax')
 
-# PyLaTeX imports
 from pylatex import Document, Section, Subsection, Command, Package
 from pylatex.utils import NoEscape, bold
 from pylatex.base_classes import Environment
-from pylatex.math import Math, Matrix as PyLatexMatrix # PyLaTeX Matrix
+from pylatex.math import Math, Matrix as PyLatexMatrix
 from pylatex.section import Paragraph
 
-# For compiling the LaTeX file
 import subprocess
 import os
 import platform
 import shutil
 
 # --- Step 0: Configuration ---
-FILENAME = 'double_pendulum_lagrangian_derivation_v2' # Updated filename
-# Set to True to include results for uniform rods
-INCLUDE_UNIFORM_CASE = True # Keeping this True as I_cm part removed
-# Set to True to attempt compiling PDF (requires LaTeX installed)
+FILENAME = 'double_pendulum_lagrangian_derivation_v2'
+INCLUDE_UNIFORM_CASE = True
 COMPILE_PDF = True
-# Set to False to keep the .tex file after compilation
 CLEAN_TEX = True
 
-# --- Steps 1-5: SymPy Calculations ---
 print("--- Running SymPy Calculations (v2) ---")
+
 # Define time symbol
 t = sp.symbols('t')
-# Define constants
-# Using U for control force instead of F
+# Define constants (U is control force)
 M, m1, m2, l1, l2, d1, d2, Icm1, Icm2, g, U = sp.symbols(
-    'M m1 m2 l1 l2 d1 d2 Icm1 Icm2 g U', real=True # Assuming real is sufficient
+    'M m1 m2 l1 l2 d1 d2 Icm1 Icm2 g U', real=True
 )
-# Collect symbols into a list for display purposes
 params = [M, m1, m2, l1, l2, d1, d2, Icm1, Icm2, g, U]
 
-# Define generalized coordinates as functions of time
+# Generalized coords
 x = sp.Function('x')(t)
 th1 = sp.Function('theta1')(t)
 th2 = sp.Function('theta2')(t)
 q = sp.Matrix([x, th1, th2])
 
-# Define first time derivatives (velocities)
+# First derivatives
 q_d = q.diff(t)
-x_d, th1_d, th2_d = q_d # Unpack
+x_d, th1_d, th2_d = q_d
 
-# Define second time derivatives (accelerations)
+# Second derivatives
 q_dd = q_d.diff(t)
-x_dd, th1_dd, th2_dd = q_dd # Unpack
+x_dd, th1_dd, th2_dd = q_dd
 
 print("Coordinates defined:", q)
 print("Velocities defined:", q_d)
 print("Accelerations defined:", q_dd)
 
+# 2. Kinematics
+r_cart = sp.Matrix([x, 0])
+r_cm1 = sp.Matrix([x + d1*sin(th1), d1*cos(th1)])
+r_cm2 = sp.Matrix([
+    x + l1*sin(th1) + d2*sin(th2),
+    l1*cos(th1) + d2*cos(th2)
+])
 
-# 2. Kinematics: Define positions and calculate velocities
-print("\n--- 2. Kinematics ---")
-# Position vectors
-r_cart = sp.Matrix([x, 0]) # Position of cart pivot
-r_cm1 = sp.Matrix([x + d1*sin(th1), d1*cos(th1)])          # Position CM Rod 1
-# r_p2 = sp.Matrix([x + l1*sin(th1), l1*cos(th1)]) # Position Pivot 2 (if needed)
-r_cm2 = sp.Matrix([x + l1*sin(th1) + d2*sin(th2), l1*cos(th1) + d2*cos(th2)]) # Position CM Rod 2
-
-# Calculate velocities by differentiating positions w.r.t. time 't'
 v_cart = r_cart.diff(t)
 v_cm1 = r_cm1.diff(t)
 v_cm2 = r_cm2.diff(t)
 
-# Extract velocity components for clarity
 vx_cart, vy_cart = v_cart
 vx_cm1, vy_cm1 = v_cm1
 vx_cm2, vy_cm2 = v_cm2
 
-print("Positions and Velocities calculated.")
-
-
-# 3. Calculate Kinetic Energy (T)
-print("\n--- 3. Kinetic Energy ---")
-# Use v.dot(v) for squared magnitude
-TCart = 0.5 * M * v_cart.dot(v_cart) # More explicit using v_cart
+# 3. Kinetic Energy
+TCart = 0.5 * M * v_cart.dot(v_cart)
 TRod1 = 0.5 * m1 * (v_cm1.dot(v_cm1)) + 0.5 * Icm1 * th1_d**2
 TRod2 = 0.5 * m2 * (v_cm2.dot(v_cm2)) + 0.5 * Icm2 * th2_d**2
 T = TCart + TRod1 + TRod2
-print("Total Kinetic Energy (T) expression formed.")
 
+# 4. Potential Energy
+V = m1*g*r_cm1[1] + m2*g*r_cm2[1]
 
-# 4. Calculate Potential Energy (V)
-print("\n--- 4. Potential Energy ---")
-# Using y-coordinates (index 1) from r_cm1, r_cm2
-V = m1 * g * r_cm1[1] + m2 * g * r_cm2[1]
-print("Total Potential Energy (V) expression formed.")
-
-
-# 5. Form the Lagrangian (L)
-print("\n--- 5. Lagrangian ---")
+# 5. Lagrangian
 L = T - V
-print("Lagrangian (L = T - V) formed.")
 
-
-# 6. Apply Euler-Lagrange Equations
-print("\n--- 6. Euler-Lagrange Equations ---")
-# Generalized forces: U corresponds to x, 0 for theta1, 0 for theta2
+# 6. Euler-Lagrange
 Q_gen = sp.Matrix([U, 0, 0])
+Eqs_LHS_vec = sp.zeros(len(q), 1)
 
-Eqs_LHS_vec = sp.zeros(len(q), 1) # Initialize as column vector
+# Store intermediate calculations for each coordinate
+dL_dqdot_list = []
+dtdL_dqdot_list = []
+dL_dq_list = []
+
 for i in range(len(q)):
     dL_dqdot = sp.diff(L, q_d[i])
     dtdL_dqdot = sp.diff(dL_dqdot, t)
     dL_dq = sp.diff(L, q[i])
     Eqs_LHS_vec[i] = dtdL_dqdot - dL_dq
-    print(f"LHS of Euler-Lagrange equations for q[{i}]: {Eqs_LHS_vec[i]}")
+    
+    # Store intermediate results
+    dL_dqdot_list.append(dL_dqdot)
+    dtdL_dqdot_list.append(dtdL_dqdot)
+    dL_dq_list.append(dL_dq)
 
-print("Calculated LHS of Euler-Lagrange equations.")
 
-
-# 7. Solve for Accelerations (Mass Matrix Method)
-print("\n--- 7. Solving for Accelerations ---")
+# 7. Solve for Accelerations (Mass Matrix)
+print("\nExtracting Mass Matrix terms:")
 M_matrix = sp.zeros(len(q), len(q))
 for i in range(len(q)):
     for j in range(len(q)):
-        M_matrix[i, j] = sp.simplify(Eqs_LHS_vec[i].coeff(q_dd[j]))
-print(f"Mass matrix: {M_matrix}")
+        # Collect all terms with the acceleration
+        M_matrix[i, j] = sp.collect(Eqs_LHS_vec[i], q_dd[j]).coeff(q_dd[j], 1)
+        print(f"M[{i},{j}] coefficient of {q_dd[j]} in equation {i}:")
+        print(sp.simplify(M_matrix[i, j]))
+
+print("\nFull Mass Matrix:")
+print(sp.simplify(M_matrix))
 
 subs_dict = {acc: 0 for acc in q_dd}
 C_G_vec = Eqs_LHS_vec.subs(subs_dict)
 rhs_vector = Q_gen - C_G_vec
-# Simplify vectors AFTER calculation
-C_G_vec = sp.simplify(C_G_vec) # Contains C*q_d + G terms
-rhs_vector = sp.simplify(rhs_vector) # Contains Tau - (C*q_d + G)
-
-print("Solving M * q_ddot = RHS...")
+C_G_vec = sp.simplify(C_G_vec)
+rhs_vector = sp.simplify(rhs_vector)
 accel_eqs_vec = sp.simplify(M_matrix.LUsolve(rhs_vector))
-print(accel_eqs_vec)
+
 print("Symbolic calculations complete.")
 
-# --- Step 8: Generate LaTeX Document using PyLaTeX ---
+# --- Step 8: Generate LaTeX Document ---
 print(f"\n--- Generating LaTeX Document ({FILENAME}.tex) ---")
-
-# Document Setup
-geometry_options = {"tmargin": "2cm", "lmargin": "2cm", "rmargin": "2cm", "bmargin":"2cm"}
+geometry_options = {"tmargin": "2cm", "lmargin": "2cm", "rmargin":"2cm", "bmargin":"2cm"}
 doc = Document(FILENAME, geometry_options=geometry_options)
-doc.packages.append(Package('amsmath'))
-doc.packages.append(Package('graphicx'))
-# Use physics package for \dot notation if desired, requires separate config
-# doc.packages.append(Package('physics'))
 
-# --- Modified Helper Functions ---
-# Configure sympy's latex printer for dot notation (might need tweaking)
-# Using derivative_brackets=False is a start. Need specific settings for \dot{}.
-# Let's try defining a custom printer for velocity/acceleration only.
-# Or rely on MathJax mode's defaults for derivatives first.
+# We want amsmath + extra packages for nicer matrices:
+doc.packages.append(Package('amsmath'))       # Already there, but re-assert
+doc.packages.append(Package('amssymb'))       # NEW
+doc.packages.append(Package('amsfonts'))      # NEW
+doc.packages.append(Package('bm'))            # Possibly for bold math if wanted
+doc.packages.append(Package('graphicx'))
+
+def format_vector_name(name):
+    """Helper to format vector names consistently"""
+    return NoEscape(r'\mathbf{' + name + r'}')
 
 def sympy_to_latex(expr, use_dot_notation=False):
-    """ Convert SymPy expression to LaTeX string. """
-    # Basic latex conversion first
-    # Inline mode often uses more compact derivative notation
-    # REMOVED: derivative_brackets=False
-    latex_str = sp.latex(expr, mode='inline')
+    """ Convert SymPy expression to bigger, parenthesised LaTeX matrix. """
+    # Configure SymPy's latex printer for better vector/matrix output
+    latex_str = sp.latex(expr, mode='inline', mat_str='matrix', mat_delim='')
+    # Insert \displaystyle:
+    latex_str = r'\displaystyle ' + latex_str
 
-    # Attempt manual replacement for dot notation (crude but might work)
-    # This part is tricky and might need refinement based on sympy's output
+    # Dot notation replacements
     if use_dot_notation:
-       # NOTE: Ensure these replacements match the actual output of sp.latex()
-       # You might need to inspect the .tex file if dots don't appear correctly
-       # and adjust these replacement patterns.
        latex_str = latex_str.replace(r'\frac{d}{d t} x{\left(t \right)}', r'\dot{x}')
        latex_str = latex_str.replace(r'\frac{d}{d t} \theta_{1}{\left(t \right)}', r'\dot{\theta}_{1}')
        latex_str = latex_str.replace(r'\frac{d}{d t} \theta_{2}{\left(t \right)}', r'\dot{\theta}_{2}')
        latex_str = latex_str.replace(r'\frac{d^{2}}{d t^{2}} x{\left(t \right)}', r'\ddot{x}')
        latex_str = latex_str.replace(r'\frac{d^{2}}{d t^{2}} \theta_{1}{\left(t \right)}', r'\ddot{\theta}_{1}')
        latex_str = latex_str.replace(r'\frac{d^{2}}{d t^{2}} \theta_{2}{\left(t \right)}', r'\ddot{\theta}_{2}')
-       # Handle cases where functions might simplify, e.g., Derivative(x(t), t)
-       latex_str = latex_str.replace(r'Derivative{\left(x{\left(t \right)}, t \right)}', r'\dot{x}')
-       latex_str = latex_str.replace(r'Derivative{\left(\theta_{1}{\left(t \right)}, t \right)}', r'\dot{\theta}_{1}')
-       latex_str = latex_str.replace(r'Derivative{\left(\theta_{2}{\left(t \right)}, t \right)}', r'\dot{\theta}_{2}')
-       latex_str = latex_str.replace(r'Derivative{\left(x{\left(t \right)}, \left(t, 2\right) \right)}', r'\ddot{x}')
-       latex_str = latex_str.replace(r'Derivative{\left(\theta_{1}{\left(t \right)}, \left(t, 2\right) \right)}', r'\ddot{\theta}_{1}')
-       latex_str = latex_str.replace(r'Derivative{\left(\theta_{2}{\left(t \right)}, \left(t, 2\right) \right)}', r'\ddot{\theta}_{2}')
+
+    # Shorthand replacements for cleaner equations
+    replacements = [
+        # Remove explicit time dependencies
+        (r'x{\left(t \right)}', 'x'),
+        (r'\theta_{1}{\left(t \right)}', r'\theta_1'),
+        (r'\theta_{2}{\left(t \right)}', r'\theta_2'),
+        # Shorthands for trig functions
+        (r'\cos{\left(\theta_{1} \right)}', r'c_1'),
+        (r'\cos{\left(\theta_{2} \right)}', r'c_2'),
+        (r'\sin{\left(\theta_{1} \right)}', r's_1'),
+        (r'\sin{\left(\theta_{2} \right)}', r's_2'),
+        # Clean up any leftover {\left and \right} artifacts
+        (r'{\left(', r'('),
+        (r'\right)}', r')'),
+    ]
+    
+    for old, new in replacements:
+        latex_str = latex_str.replace(old, new)
+
+    # Handle matrices and vectors more robustly
+    if isinstance(expr, sp.Matrix):
+        # Remove any \left[ and \right] that SymPy might have added
+        latex_str = latex_str.replace(r'\left[', '')
+        latex_str = latex_str.replace(r'\right]', '')
+        
+        if expr.shape[1] == 1:  # Column vector
+            latex_str = latex_str.replace(r'\begin{matrix}', r'\begin{pmatrix}')
+            latex_str = latex_str.replace(r'\end{matrix}', r'\end{pmatrix}')
+        else:  # Regular matrix
+            latex_str = latex_str.replace(r'\begin{matrix}', r'\begin{bmatrix}')
+            latex_str = latex_str.replace(r'\end{matrix}', r'\end{bmatrix}')
+
+    # Remove HTML tags
+    for remove_tag in (r'<span class="math-inline">', r'</span>', r'<span class="math-block">'):
+        latex_str = latex_str.replace(remove_tag, '')
+
+    # Remove any stray dollar signs
+    latex_str = latex_str.replace('$', '')
 
     return latex_str
 
-def add_sympy_eq_rhs(doc_obj, lhs_str, sympy_rhs_expr, label_str, use_dot=False):
-    """Adds 'LHS = RHS' equation from SymPy expr with label."""
-    lhs_latex = NoEscape(lhs_str + r' = ')
-    rhs_latex = NoEscape(sympy_to_latex(sympy_rhs_expr, use_dot_notation=use_dot))
+def sympy_to_multiline_latex(expr, use_dot_notation=False, line_length=55):
+    """
+    Convert SymPy expression to LaTeX with automatic line breaks for long expressions.
+    Uses aligned environment to ensure proper alignment.
+    """
+    # Get the basic LaTeX string first
+    latex_str = sympy_to_latex(expr, use_dot_notation)
+    
+    # If it's short enough, return as is
+    if len(latex_str) <= line_length:
+        return latex_str
+    
+    # Find good break points (+ and - operators at the top level)
+    # and additional break points at multiplication and other operations
+    parts = []
+    current_part = ""
+    paren_level = 0
+    
+    # Define additional break characters
+    primary_break_chars = ['+', '-']
+    secondary_break_chars = ['\\cdot', '\\sin', '\\cos', '=']
+    
+    i = 0
+    while i < len(latex_str):
+        # Track parentheses level
+        if latex_str[i] in ['(', '[', '{']:
+            paren_level += 1
+        elif latex_str[i] in [')', ']', '}']:
+            paren_level -= 1
+        
+        # Check for primary break points (+ and - not in exponents or subscripts)
+        if paren_level == 0 and i > 0 and latex_str[i] in primary_break_chars and latex_str[i-1] != '^' and latex_str[i-1] != '_':
+            parts.append(current_part)
+            current_part = latex_str[i]  # Start new part with the operator
+            i += 1
+            continue
+            
+        # Check for secondary break points (functions like sin, cos, etc.)
+        found_secondary = False
+        if paren_level == 0 and len(current_part) > line_length // 2:
+            for break_str in secondary_break_chars:
+                if i + len(break_str) <= len(latex_str) and latex_str[i:i+len(break_str)] == break_str:
+                    parts.append(current_part)
+                    current_part = ""
+                    found_secondary = True
+                    break
+        
+        if not found_secondary:
+            current_part += latex_str[i]
+            i += 1
+            
+        # Force break if current part gets too long
+        if len(current_part) > line_length and paren_level == 0:
+            parts.append(current_part)
+            current_part = ""
+            
+    # Add the last part
+    if current_part:
+        parts.append(current_part)
+    
+    # Generate the multiline output with proper alignment
+    result = r'\begin{aligned} '
+    
+    # First line doesn't need indentation
+    result += parts[0] + r' \\' + '\n'
+    
+    # Remaining lines
+    for part in parts[1:]:
+        result += r'& ' + part + r' \\' + '\n'
+    
+    # Close the environment
+    result = result.rstrip('\n').rstrip('\\\\') + r' '
+    result += r'\end{aligned}'
+    
+    return result
+
+def add_multiline_eq(doc_obj, lhs_str, sympy_expr, label_str, use_dot=False):
+    """
+    Add a potentially long equation with proper line breaking
+    """
     env = Environment()
-    env._latex_name = 'equation'
-    env.options = NoEscape(r'\label{eq:' + label_str + r'}') # Add label
-    env.append(lhs_latex)
-    env.append(rhs_latex)
+    env._latex_name = 'align*'
+    lhs_latex = lhs_str
+    rhs_latex = sympy_to_multiline_latex(sympy_expr, use_dot_notation=use_dot)
+    env.append(NoEscape(lhs_latex + r' &= ' + rhs_latex + r' \\'))
+    doc_obj.append(env)
+
+def add_sympy_eq_rhs(doc_obj, lhs_str, sympy_rhs_expr, label_str, use_dot=False):
+    """
+    Add an equation with align* environment, no HTML.
+    """
+    lhs_latex = lhs_str
+    rhs_latex = sympy_to_latex(sympy_rhs_expr, use_dot_notation=use_dot)
+
+    # Use align* environment directly
+    env = Environment()
+    env._latex_name = 'align*'
+    env.append(NoEscape(lhs_latex + r' &= ' + rhs_latex + r' \\'))
     doc_obj.append(env)
 
 def add_sympy_matrix_eq_rhs(doc_obj, lhs_str, sympy_matrix, label_str):
-    """Adds 'LHS = Matrix' equation from SymPy matrix with label."""
-    doc_obj.append(NoEscape(lhs_str + r' = ')) # Add "M = " before matrix
-    math_cmd = NoEscape(sympy_to_latex(sympy_matrix)) # Use helper
+    """Same as above but for matrix eq: lhs = matrix."""
+    matrix_latex = sympy_to_latex(sympy_matrix)
+    
+    # Use align* environment directly
     env = Environment()
-    env._latex_name = 'equation*' # Use equation* for unnumbered matrix display if preferred
-    # env._latex_name = 'equation' # Use equation for numbered matrix display
-    env.options = NoEscape(r'\label{eq:' + label_str + r'}') # Label still works
-    env.append(math_cmd)
+    env._latex_name = 'align*'
+    env.append(NoEscape(lhs_str + r' &= ' + matrix_latex + r' \\'))
     doc_obj.append(env)
 
+def add_shorthand_definitions(doc):
+    """Add definitions of our shorthands at the start of the document"""
+    doc.append(NoEscape(r'\begin{align*}'))
+    doc.append(NoEscape(r'&\text{Where: } \\'))
+    doc.append(NoEscape(r'&c_1 = \cos(\theta_1), \quad s_1 = \sin(\theta_1) \\'))
+    doc.append(NoEscape(r'&c_2 = \cos(\theta_2), \quad s_2 = \sin(\theta_2)'))
+    doc.append(NoEscape(r'\end{align*}'))
+    doc.append(NoEscape(r'\vspace{1em}'))  # Add some vertical space
 
-# --- Populate Document (v2) ---
+def add_mass_matrix_elements(doc_obj, M):
+    """Add mass matrix elements one by one with clear labeling"""
+    doc.append(NoEscape(r'\begin{align*}'))
+    for i in range(M.shape[0]):
+        for j in range(M.shape[1]):
+            element = sp.simplify(M[i,j])
+            if element != 0:  # Only show non-zero elements
+                doc.append(NoEscape(f"M_{{{i+1}{j+1}}} &= {sp.latex(element)} \\\\"))
+    doc.append(NoEscape(r'\end{align*}'))
+    doc.append(NoEscape(r'\vspace{1em}'))  # Add some vertical space
 
-# Title
+# Title, etc.
 doc.preamble.append(Command('title', 'Lagrangian Derivation of Double Inverted Pendulum Dynamics (v2)'))
 doc.preamble.append(Command('author', 'Generated by SymPy and PyLaTeX'))
 doc.preamble.append(Command('date', NoEscape(r'\today')))
 doc.append(NoEscape(r'\maketitle'))
-doc.append(NoEscape(r'\tableofcontents')) # Add table of contents
+doc.append(NoEscape(r'\tableofcontents'))
 doc.append(NoEscape(r'\newpage'))
 
-# Introduction / Setup
 with doc.create(Section('1. System Setup')):
-    doc.append('This document details the derivation of the equations of motion for a double inverted pendulum on a cart using the Lagrangian method.')
+    doc.append('This document details the derivation of equations of motion for a double inverted pendulum on a cart using the Lagrangian method.\n')
     doc.append(Paragraph("Constants defined (U is control force):"))
     doc.append(Math(data=[NoEscape(sympy_to_latex(params))]))
     doc.append(Paragraph("Generalized coordinates (functions of time t):"))
-    add_sympy_eq_rhs(doc, "q(t)", q, "gen_coords") # Using helper
+    add_sympy_eq_rhs(doc, r"q(t)", q, "gen_coords")
     doc.append(Paragraph("Generalized velocities:"))
-    add_sympy_eq_rhs(doc, r"\dot{q}(t)", q_d, "gen_vels", use_dot=True) # Using helper
+    add_sympy_eq_rhs(doc, r"\dot{q}(t)", q_d, "gen_vels", use_dot=True)
     doc.append(Paragraph("Generalized accelerations:"))
-    add_sympy_eq_rhs(doc, r"\ddot{q}(t)", q_dd, "gen_accels", use_dot=True) # Using helper
+    add_sympy_eq_rhs(doc, r"\ddot{q}(t)", q_dd, "gen_accels", use_dot=True)
 
-# Kinematics
 with doc.create(Section('2. Kinematics')):
-    doc.append('The positions and velocities of the cart and the centers of mass (CM) for Rod 1 and Rod 2 are required.')
     with doc.create(Subsection('Positions')):
          doc.append('Position of Cart Pivot:')
-         add_sympy_eq_rhs(doc, r"\mathbf{r}_{cart}", r_cart, "r_cart")
+         add_sympy_eq_rhs(doc, format_vector_name('r_{cart}'), r_cart, "r_cart")
          doc.append('Position of CM of Rod 1:')
-         add_sympy_eq_rhs(doc, r"\mathbf{r}_{cm1}", r_cm1, "r_cm1")
+         add_sympy_eq_rhs(doc, format_vector_name('r_{cm1}'), r_cm1, "r_cm1")
          doc.append('Position of CM of Rod 2:')
-         add_sympy_eq_rhs(doc, r"\mathbf{r}_{cm2}", r_cm2, "r_cm2")
+         add_sympy_eq_rhs(doc, format_vector_name('r_{cm2}'), r_cm2, "r_cm2")
 
     with doc.create(Subsection('Velocities')):
         doc.append('Velocity of Cart:')
-        add_sympy_eq_rhs(doc, r"\mathbf{v}_{cart}", v_cart, "v_cart", use_dot=True)
-        # Corrected line for cart velocity components description
+        add_sympy_eq_rhs(doc, format_vector_name('v_{cart}'), v_cart, "v_cart", use_dot=True)
         doc.append(NoEscape(r"Components are $v_{x,cart} = \dot{x}$ and $v_{y,cart} = 0$."))
-        doc.append(Paragraph('Velocity of CM of Rod 1 <span class="math-inline">\\mathbf\{v\}\_\{cm1\} \= \[v\_\{x,cm1\}, v\_\{y,cm1\}\]^T</span>:'))
-        add_sympy_eq_rhs(doc, "v_{x,cm1}", vx_cm1, "vx_cm1", use_dot=True)
-        add_sympy_eq_rhs(doc, "v_{y,cm1}", vy_cm1, "vy_cm1", use_dot=True)
 
-        doc.append(Paragraph('Velocity of CM of Rod 2 <span class="math-inline">\\mathbf\{v\}\_\{cm2\} \= \[v\_\{x,cm2\}, v\_\{y,cm2\}\]^T</span>:'))
-        add_sympy_eq_rhs(doc, "v_{x,cm2}", vx_cm2, "vx_cm2", use_dot=True)
-        add_sympy_eq_rhs(doc, "v_{y,cm2}", vy_cm2, "vy_cm2", use_dot=True)
+        # Rod 1 velocity in matrix form
+        doc.append('Velocity of CM of Rod 1:')
+        v_cm1_matrix = sp.Matrix([vx_cm1, vy_cm1])
+        add_sympy_eq_rhs(doc, format_vector_name('v_{cm1}'), v_cm1_matrix, "v_cm1", use_dot=True)
 
+        # Rod 2 velocity in matrix form
+        doc.append('Velocity of CM of Rod 2:')
+        v_cm2_matrix = sp.Matrix([vx_cm2, vy_cm2])
+        add_sympy_eq_rhs(doc, format_vector_name('v_{cm2}'), v_cm2_matrix, "v_cm2", use_dot=True)
 
-# Kinetic Energy
 with doc.create(Section('3. Kinetic Energy (T)')):
-    doc.append(NoEscape(r'Total kinetic energy <span class="math-inline">T \= T\_\{cart\} \+ T\_\{rod1\} \+ T\_\{rod2\}</span>, where:'))
-    # Using specific velocity components here makes it clearer
-    doc.append(NoEscape(r'$$ T_{cart} = \frac{1}{2} M v_{x,cart}^2 <span class="math-block">'))
-    # Corrected line for T_rod1 definition
+    doc.append(NoEscape(r'Total kinetic energy $T = T_{cart} + T_{rod1} + T_{rod2}$.'))
+    doc.append(NoEscape(r'$$ T_{cart} = \frac{1}{2} M v_{x,cart}^2 $$'))
     doc.append(NoEscape(r'$$ T_{rod1} = \frac{1}{2} m_1 (v_{x,cm1}^2 + v_{y,cm1}^2) + \frac{1}{2} I_{cm1} \dot{\theta}_1^2 $$'))
-    # Corrected line for T_rod2 definition
-    doc.append(NoEscape(
-        r'$$ T_{rod2} = \frac{1}{2} m_2 (v_{x,cm2}^2 + v_{y,cm2}^2) + \frac{1}{2} I_{cm2} \dot{\theta}_2^2 $$'))
-    doc.append('The full symbolic expression for T is calculated but omitted here for brevity.')
+    doc.append(NoEscape(r'$$ T_{rod2} = \frac{1}{2} m_2 (v_{x,cm2}^2 + v_{y,cm2}^2) + \frac{1}{2} I_{cm2} \dot{\theta}_2^2 $$'))
 
-
-# Potential Energy
 with doc.create(Section('4. Potential Energy (V)')):
-    doc.append(NoEscape(r'Assuming zero potential energy at <span class="math-inline">y\=0</span>, the potential energy <span class="math-inline">V</span> is given by <span class="math-inline">V \= m\_1 g y\_\{cm1\} \+ m\_2 g y\_\{cm2\}</span>.'))
+    doc.append(NoEscape(r'Zero potential at $y=0$. So $V = m_1 g\,y_{cm1} + m_2 g\,y_{cm2}$.'))
     add_sympy_eq_rhs(doc, "V", V, "potential_energy")
 
-# Lagrangian
 with doc.create(Section('5. Lagrangian (L)')):
-    doc.append(NoEscape(r'The Lagrangian is defined as <span class="math-inline">L \= T \- V</span>.'))
-    doc.append('The full symbolic expression for L is calculated internally but not displayed.')
+    doc.append(NoEscape(r'The Lagrangian is $L = T - V$.'))
 
-# Euler-Lagrange Equations
 with doc.create(Section('6. Euler-Lagrange Equations')):
-    doc.append(NoEscape(r'The equations of motion are found using the Euler-Lagrange equation for each generalized coordinate <span class="math-inline">q\_i \\in \\\{x, \\theta\_1, \\theta\_2\\\}</span>:'))
-    # Use equation* for unnumbered general equation
-    doc.append(NoEscape(r'\begin{equation*} \frac{d}{dt} \left( \frac{\partial L}{\partial \dot{q}_i} \right) - \frac{\partial L}{\partial q_i} = Q_i \quad \label{eq:EL_general} \end{equation*}'))
-    doc.append(NoEscape(r'Where <span class="math-inline">Q\_i</span> are the generalized forces. For this system, <span class="math-inline">Q \= \[U, 0, 0\]^T</span>.'))
-    doc.append('Calculating these derivatives leads to three coupled second-order differential equations.')
+    doc.append(NoEscape(r'$\frac{d}{dt}\bigl(\frac{\partial L}{\partial \dot{q}_i}\bigr) - \frac{\partial L}{\partial q_i} = Q_i$. For this system, $Q = [U, 0, 0]^T$.'))
+    
+    doc.append(Paragraph(bold('Intermediate steps of the Euler-Lagrange equations:')))
+    
+    # Add shorthand definitions
+    add_shorthand_definitions(doc)
+    
+    coord_names = ["x", "\\theta_1", "\\theta_2"]
+    
+    with doc.create(Subsection('Partial derivatives with respect to velocities')):
+        for i in range(len(q)):
+            doc.append(Paragraph(f"For coordinate ${coord_names[i]}$:"))
+            add_multiline_eq(doc, r"\frac{\partial L}{\partial \dot{" + coord_names[i] + r"}}", dL_dqdot_list[i], f"dL_dqdot_{i}", use_dot=True)
+    
+    with doc.create(Subsection('Time derivatives of partial derivatives')):
+        for i in range(len(q)):
+            doc.append(Paragraph(f"For coordinate ${coord_names[i]}$:"))
+            add_multiline_eq(doc, r"\frac{d}{dt}\left(\frac{\partial L}{\partial \dot{" + coord_names[i] + r"}}\right)", dtdL_dqdot_list[i], f"dtdL_dqdot_{i}", use_dot=True)
+    
+    with doc.create(Subsection('Partial derivatives with respect to coordinates')):
+        for i in range(len(q)):
+            doc.append(Paragraph(f"For coordinate ${coord_names[i]}$:"))
+            add_multiline_eq(doc, r"\frac{\partial L}{\partial " + coord_names[i] + r"}", dL_dq_list[i], f"dL_dq_{i}", use_dot=True)
+    
+    with doc.create(Subsection('Complete Euler-Lagrange equations (LHS)')):
+        for i in range(len(q)):
+            doc.append(Paragraph(f"For coordinate ${coord_names[i]}$:"))
+            add_multiline_eq(doc, r"\frac{d}{dt}\left(\frac{\partial L}{\partial \dot{" + coord_names[i] + r"}}\right) - \frac{\partial L}{\partial " + coord_names[i] + r"}", Eqs_LHS_vec[i], f"eq_lhs_{i}", use_dot=True)
 
-# Solving for Accelerations
 with doc.create(Section('7. Solving for Accelerations')):
-    doc.append('The Euler-Lagrange equations can be written in the standard matrix form for manipulators:')
-    # Use equation* for unnumbered general equation
-    doc.append(NoEscape(r'\begin{equation*} M(q) \ddot{q} + C(q, \dot{q})\dot{q} + G(q) = \tau \quad \label{eq:matrix_form} \end{equation*}'))
-    doc.append(NoEscape(r'Where <span class="math-inline">M\(q\)</span> is the mass matrix, <span class="math-inline">C\(q, \\dot\{q\}\)\\dot\{q\}</span> represents Coriolis/centrifugal terms (<span class="math-inline">C\\dot\{q\}</span> vector), <span class="math-inline">G\(q\)</span> represents gravitational terms (<span class="math-inline">G</span> vector), and <span class="math-inline">\\tau</span> is the vector of generalized forces (here <span class="math-inline">\\tau \= Q \= \[U, 0, 0\]^T</span>).'))
-    doc.append(NoEscape(r'Our calculation identifies <span class="math-inline">M\(q\)</span> and the remaining terms (<span class="math-inline">C\\dot\{q\} \+ G</span>), rearranged as <span class="math-inline">M\(q\) \\ddot\{q\} \= \\tau \- \(C\(q, \\dot\{q\}\)\\dot\{q\} \+ G\(q\)\)</span>.'))
+    doc.append(r'The equations can be written in the form $M(q)\ddot{q} + C(q,\dot{q})\dot{q} + G(q) = \tau$.')
+    
+    doc.append(Paragraph(bold('Mass Matrix M(q) elements:')))
+    add_mass_matrix_elements(doc, M_matrix)
+    
+    doc.append(Paragraph(bold(r'Calculated RHS Vector $\tau - (C\dot{q}+G)$:')))
+    add_sympy_matrix_eq_rhs(doc, r"\tau - (C\dot{q}+G)", rhs_vector, "rhs_vector")
 
-    doc.append(Paragraph(bold('Calculated Mass Matrix M(q):')))
-    add_sympy_matrix_eq_rhs(doc, "M(q)", M_matrix, "mass_matrix")
-
-    doc.append(Paragraph(bold(NoEscape(r'Calculated RHS Vector <span class="math-inline">\\tau \- \(C\(q, \\dot\{q\}\)\\dot\{q\} \+ G\(q\)\)</span>:'))))
-    add_sympy_matrix_eq_rhs(doc, r"\tau - (C\dot{q} + G)", rhs_vector, "rhs_vector")
-
-    doc.append(NoEscape(r'Solving <span class="math-inline">\\ddot\{q\} \= M\(q\)^\{\-1\} \(\\tau \- \(C\\dot\{q\} \+ G\)\)</span> gives the equations of motion.'))
-
-# Results
 with doc.create(Section('8. Equations of Motion (Accelerations)')):
-    doc.append('The final expressions for the generalized accelerations are:')
+    doc.append('Final expressions for the accelerations are:')
     with doc.create(Subsection('Acceleration of the cart')):
         add_sympy_eq_rhs(doc, r"\ddot{x}", accel_eqs_vec[0], "x_ddot", use_dot=True)
     with doc.create(Subsection('Angular Acceleration of Rod 1')):
         add_sympy_eq_rhs(doc, r"\ddot{\theta}_1", accel_eqs_vec[1], "th1_ddot", use_dot=True)
     with doc.create(Subsection('Angular Acceleration of Rod 2')):
-         add_sympy_eq_rhs(doc, r"\ddot{\theta}_2", accel_eqs_vec[2], "th2_ddot", use_dot=True)
+        add_sympy_eq_rhs(doc, r"\ddot{\theta}_2", accel_eqs_vec[2], "th2_ddot", use_dot=True)
 
-# Optional: Uniform Rod Case
 if INCLUDE_UNIFORM_CASE:
     try:
         with doc.create(Section('9. Uniform Rod Case')):
-            doc.append('Substituting parameters for uniform rods (excluding <span class="math-inline">I\_\{cm\}</span>):')
-            doc.append(NoEscape(r'$$ d_1 = l_1/2, \quad d_2 = l_2/2 $$'))
-
-            # Use Rational for exact fractions
+            doc.append('Substituting uniform rods: $d_1 = l_1/2, d_2 = l_2/2$.')
             uniform_rod_subs = {
                 d1: l1/sp.Rational(2),
                 d2: l2/sp.Rational(2)
-                # Icm1 and Icm2 are NOT substituted per user request
             }
-            print("\nSubstituting uniform rod parameters (d1, d2 only)...")
             M_matrix_uniform = sp.simplify(M_matrix.subs(uniform_rod_subs))
             rhs_vector_uniform = sp.simplify(rhs_vector.subs(uniform_rod_subs))
-
-            print("Re-solving with uniform rod parameters...")
             accel_eqs_vec_uniform = sp.simplify(M_matrix_uniform.LUsolve(rhs_vector_uniform))
 
             doc.append(Paragraph(bold('Mass Matrix M(q) (Uniform Rods):')))
@@ -337,63 +528,40 @@ if INCLUDE_UNIFORM_CASE:
             add_sympy_eq_rhs(doc, r"\ddot{x}", accel_eqs_vec_uniform[0], "x_ddot_uniform", use_dot=True)
             add_sympy_eq_rhs(doc, r"\ddot{\theta}_1", accel_eqs_vec_uniform[1], "th1_ddot_uniform", use_dot=True)
             add_sympy_eq_rhs(doc, r"\ddot{\theta}_2", accel_eqs_vec_uniform[2], "th2_ddot_uniform", use_dot=True)
-
     except Exception as e:
-        print(f"Error during uniform rod substitution/display: {e}")
-        doc.append(Paragraph(bold('Error occurred during uniform rod calculation.')))
+        doc.append(Paragraph(bold('Error during uniform rod substitution.')))
+        print(e)
 
-
-# --- Step 9: Generate and Compile PDF ---
 print(f"\n--- Generating PDF ({FILENAME}.pdf) ---")
-
-# Check if pdflatex command exists
 compiler = 'pdflatex'
 if not shutil.which(compiler):
-    print(f"ERROR: '{compiler}' command not found.")
-    print("Please install a LaTeX distribution (TeX Live or MiKTeX) and ensure it's in your system's PATH.")
+    print(f"ERROR: '{compiler}' not found.")
     COMPILE_PDF = False
 
 if COMPILE_PDF:
     try:
-        # Generate PDF. Might need multiple runs for labels/TOC.
-        print(f"Generating {FILENAME}.pdf (might take a moment)...")
-        doc.generate_pdf(FILENAME, clean_tex=CLEAN_TEX, compiler=compiler, compiler_args=['-interaction=nonstopmode']) # Run twice for TOC/labels
-        # Check if compilation succeeded (basic check: pdf exists)
+        doc.generate_pdf(FILENAME, clean_tex=CLEAN_TEX, compiler=compiler, compiler_args=['-interaction=nonstopmode'])
         pdf_path = f"{FILENAME}.pdf"
         if os.path.exists(pdf_path):
-             # Run again for references/TOC
-             print("Running LaTeX compiler again for references...")
-             doc.generate_pdf(FILENAME, clean_tex=CLEAN_TEX, compiler=compiler, compiler_args=['-interaction=nonstopmode'])
-             print(f"Successfully generated {FILENAME}.pdf")
-
-             # Optional: Open the PDF based on OS
-             if os.path.exists(pdf_path): # Check again after second run
-                 print(f"Attempting to open {pdf_path}...")
-                 try:
-                     if platform.system() == "Windows":
-                         os.startfile(pdf_path)
-                     elif platform.system() == "Darwin": # macOS
-                         subprocess.call(['open', pdf_path])
-                     else: # Linux
-                         subprocess.call(['xdg-open', pdf_path])
-                 except Exception as open_e:
-                      print(f"Could not automatically open PDF: {open_e}")
-             else:
-                  print(f"Output PDF {pdf_path} not found after second compilation run.")
+            doc.generate_pdf(FILENAME, clean_tex=CLEAN_TEX, compiler=compiler, compiler_args=['-interaction=nonstopmode'])
+            print(f"Successfully generated {FILENAME}.pdf")
+            if os.path.exists(pdf_path):
+                try:
+                    if platform.system() == "Windows":
+                        os.startfile(pdf_path)
+                    elif platform.system() == "Darwin":
+                        subprocess.call(['open', pdf_path])
+                    else:
+                        subprocess.call(['xdg-open', pdf_path])
+                except Exception as open_e:
+                    print(f"Could not open PDF automatically: {open_e}")
         else:
-             print(f"Output PDF {pdf_path} not found after first compilation run. Check {FILENAME}.log.")
-
+            print(f"{pdf_path} not found. Check log.")
     except Exception as e:
-        # Catch potential errors during PDF generation (e.g., LaTeX errors)
-        print(f"\nError generating PDF: {e}")
-        print(f"Check the LaTeX log file: {FILENAME}.log")
-        print(f"The LaTeX source file is available at: {FILENAME}.tex (if clean_tex=False)")
+        print(f"Error generating PDF: {e}")
+        print(f"Check the .log file or {FILENAME}.tex")
 else:
-    # Generate only the .tex file if PDF compilation is disabled or compiler not found
-    try:
-        doc.generate_tex(FILENAME)
-        print(f"Successfully generated {FILENAME}.tex. PDF compilation skipped.")
-    except Exception as e:
-        print(f"Error generating TEX file: {e}")
+    doc.generate_tex(FILENAME)
+    print(f"Generated {FILENAME}.tex only.")
 
 print("\n--- Script Finished ---")

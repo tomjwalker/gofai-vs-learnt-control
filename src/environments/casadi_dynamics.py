@@ -3,41 +3,107 @@ import casadi as ca
 from typing import Dict, Any
 
 
-def pendulum_dynamics(x: ca.SX, u: ca.SX, dt: float, params: Dict[str, Any]) -> ca.SX:
+def _euler_integration(x: ca.SX, x_dot: ca.SX, x_ddot: ca.SX, dt: float) -> ca.SX:
     """
-    Computes the next state of the inverted pendulum using Euler integration
+    Perform one step of Euler integration.
+    
+    Args:
+        x: Current state
+        x_dot: Current velocity
+        x_ddot: Current acceleration
+        dt: Time step
+        
+    Returns:
+        Next state after Euler integration
+    """
+    next_pos = x[0] + x_dot[0] * dt
+    next_theta = x[1] + x_dot[1] * dt
+    next_vel = x_dot[0] + x_ddot[0] * dt
+    next_theta_dot = x_dot[1] + x_ddot[1] * dt
+    
+    return ca.vertcat(next_pos, next_theta, next_vel, next_theta_dot)
+
+def _rk4_integration(x: ca.SX, u: ca.SX, dt: float, params: Dict[str, Any]) -> ca.SX:
+    """
+    Perform one step of RK4 integration.
+    
+    Args:
+        x: Current state
+        u: Control input
+        dt: Time step
+        params: System parameters
+        
+    Returns:
+        Next state after RK4 integration
+    """
+    def f(x_state, u_input):
+        pos, theta, x_dot, theta_dot = x_state[0], x_state[1], x_state[2], x_state[3]
+        
+        # Recompute accelerations for this state
+        cos_theta = ca.cos(theta)
+        sin_theta = ca.sin(theta)
+        inertia_matrix = ca.vertcat(
+            ca.horzcat(params['cart_mass'] + params['pole_mass'], 
+                      params['pole_mass'] * params['pole_half_length'] * cos_theta),
+            ca.horzcat(params['pole_mass'] * params['pole_half_length'] * cos_theta, 
+                      params['pole_inertia_about_y'] + params['pole_mass'] * params['pole_half_length'] ** 2)
+        )
+        force_vector = ca.vertcat(
+            u_input + params['pole_mass'] * params['pole_half_length'] * theta_dot ** 2 * sin_theta,
+            params['pole_mass'] * params['gravity'] * params['pole_half_length'] * sin_theta
+        )
+        accels = ca.solve(inertia_matrix, force_vector)
+        
+        return ca.vertcat(x_dot, theta_dot, accels[0], accels[1])
+    
+    k1 = f(x, u)
+    k2 = f(x + dt/2 * k1, u)
+    k3 = f(x + dt/2 * k2, u)
+    k4 = f(x + dt * k3, u)
+    
+    return x + dt/6 * (k1 + 2*k2 + 2*k3 + k4)
+
+def pendulum_dynamics(x: ca.SX, u: ca.SX, dt: float, params: Dict[str, Any], 
+                     integration_method: str = 'rk4') -> ca.SX:
+    """
+    Computes the next state of the inverted pendulum using either Euler or RK4 integration
     with CasADi symbolic expressions. The state is assumed to follow the Gymnasium ordering:
     [x, theta, x_dot, theta_dot].
 
     This function implements the discrete-time dynamics for a cart-pole system where the rod (pole)
-    has a distributed mass. The continuous-time equations used are:
+    has a distributed mass. The continuous-time equations of motion are expressed in mass matrix form:
 
-        (M + m) * x_ddot + m * d * (theta_ddot * cos(theta) - theta_dot^2 * sin(theta)) = u
-        I_pivot * theta_ddot + m * d * x_ddot * cos(theta) + m * g * d * sin(theta) = 0
+        M(q)q_ddot = forces
 
     where:
+        q = [x, theta]^T is the configuration vector
+        M(q) = [M + m, m * d * cos(theta); m * d * cos(theta), I_pivot] is the mass matrix
+        forces = [u + m * d * theta_dot^2 * sin(theta); m * g * d * sin(theta)] is the force vector
+
+    The parameters are:
         - M is the cart mass.
         - m is the rod (pole) mass.
-        - d is the distance from the pivot (cart) to the rod’s center of mass.
+        - d is the distance from the pivot (cart) to the rod's center of mass.
         - I_pivot is the moment of inertia of the rod about the pivot,
           computed via the parallel axis theorem: I_pivot = I_pole_com + m * d^2,
-          with I_pole_com being the inertia about the rod’s center of mass.
+          with I_pole_com being the inertia about the rod's center of mass.
         - g is the gravitational acceleration.
 
-    The discrete dynamics are computed by performing one Euler integration step:
-        x_next = x + dt * f(x, u)
-    where f(x, u) includes the computed accelerations.
+    The discrete dynamics can be computed using either:
+    - Euler integration: x_next = x + dt * f(x, u)
+    - RK4 integration: x_next = x + dt/6 * (k1 + 2*k2 + 2*k3 + k4)
 
     Args:
         x (ca.SX): Current state vector [x, theta, x_dot, theta_dot].
         u (ca.SX): Control input (scalar force on the cart).
-        dt (float): Timestep for Euler integration.
+        dt (float): Timestep for integration.
         params (Dict[str, Any]): Dictionary containing the pendulum parameters:
             - 'cart_mass': (M) Cart mass (kg).
             - 'pole_mass': (m) Rod mass (kg).
             - 'pole_half_length': (d) Half-length of the pole (m); used as the distance from pivot to COM.
             - 'pole_inertia_about_y': (I_pole_com) Rod inertia about its COM (kg·m²), for rotation about the y-axis.
             - 'gravity': Gravitational acceleration (m/s²).
+        integration_method (str): Either 'euler' or 'rk4' (default).
 
     Returns:
         ca.SX: Next state vector [x_next, theta_next, x_dot_next, theta_dot_next] as a CasADi symbolic expression.
@@ -69,7 +135,7 @@ def pendulum_dynamics(x: ca.SX, u: ca.SX, dt: float, params: Dict[str, Any]) -> 
     # Build the force vector symbolically.
     force_vector = ca.vertcat(
         u + m * d * theta_dot ** 2 * sin_theta,
-        -m * g * d * sin_theta
+        m * g * d * sin_theta
     )
 
     # Solve for the accelerations: [x_ddot, theta_ddot]
@@ -79,12 +145,15 @@ def pendulum_dynamics(x: ca.SX, u: ca.SX, dt: float, params: Dict[str, Any]) -> 
     x_ddot = accelerations[0]
     theta_ddot = accelerations[1]
 
-    # Euler integration step to obtain next state.
-    next_pos = pos + x_dot * dt
-    next_theta = theta + theta_dot * dt
-    next_vel = x_dot + x_ddot * dt
-    next_theta_dot = theta_dot + theta_ddot * dt
+    # Choose integration method
+    if integration_method == 'euler':
+        # Euler integration step to obtain next state.
+        x_dot_vec = ca.vertcat(x_dot, theta_dot)
+        x_ddot_vec = ca.vertcat(x_ddot, theta_ddot)
+        x_next = _euler_integration(ca.vertcat(pos, theta), x_dot_vec, x_ddot_vec, dt)
+    elif integration_method == 'rk4':
+        x_next = _rk4_integration(x, u, dt, params)
+    else:
+        raise ValueError(f"Unknown integration method: {integration_method}")
 
-    # Return the next state as a CasADi symbolic expression.
-    x_next = ca.vertcat(next_pos, next_theta, next_vel, next_theta_dot)
     return x_next
