@@ -112,7 +112,7 @@ def create_animated_diagnostics(history, episode=0):
     
     return anim
 
-def run_mpc_with_diagnostics(num_episodes=1, max_steps=200, render_mode=None):
+def run_mpc_with_diagnostics(num_episodes=1, max_steps=1000, render_mode=None):
     """
     Run the InvertedPendulum-v4 environment with your MPCController,
     collecting diagnostic data at each step and plotting afterwards.
@@ -121,8 +121,8 @@ def run_mpc_with_diagnostics(num_episodes=1, max_steps=200, render_mode=None):
     # Create the environment with optional video-friendly render mode
     env = gym.make("InvertedPendulum-v4", render_mode=render_mode)
     controller = MPCController(
-        N=10,
-        dt=0.002,  # ensure this is consistent with env dt, if you rely on real-time
+        N=20,  # Increased prediction horizon
+        dt=0.05,  # Increased timestep for better prediction
         param_path="../src/environments/inverted_pendulum_params.json"
     )
 

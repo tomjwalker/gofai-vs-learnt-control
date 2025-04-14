@@ -175,9 +175,9 @@ class MPCController:
         self.dt = dt
 
         # Define cost matrices with higher weights on angle and terminal cost
-        self.Q = ca.diag([1.0, 100.0, 0.1, 1.0])  # Increased theta and theta_dot weights
-        self.R = ca.DM([0.1])  # Increased control weight to prevent excessive control
-        self.Q_terminal = 10.0 * self.Q  # Much higher terminal cost to ensure final state is upright
+        self.Q = ca.diag([1.0, 50.0, 10.0, 50.0])  # [x, theta, x_dot, theta_dot] - increased velocity weights
+        self.R = ca.DM([1.0])  # Increased control weight to discourage saturation
+        self.Q_terminal = 5.0 * self.Q  # Reduced terminal cost multiplier
 
         # Define reference state (upright position)
         self.X_ref = ca.DM.zeros(4, 1)
