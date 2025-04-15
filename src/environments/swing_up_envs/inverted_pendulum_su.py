@@ -1,3 +1,57 @@
+"""
+Custom Gymnasium environment wrapper for the Inverted Pendulum Swing-Up task.
+
+This module defines a wrapper `InvertedPendulumSwingUp` around the standard
+Gymnasium `InvertedPendulum-v5` environment. The goal is modified from simply
+balancing the pole upright to starting with the pole hanging down and actively
+swinging it up to the balanced position.
+
+Modifications from the base `InvertedPendulum-v5` environment:
+
+1.  **Initial State (`reset` method):**
+    *   The pole's starting angle (`qpos[1]`) is deterministically set to -π radians
+      (pointing straight down).
+    *   The initial angular and linear velocities (`qvel`) are set to zero.
+    *   This overrides the base environment's reset which starts near the upright
+      position (angle ≈ 0) with small random noise.
+
+2.  **Reward Function (`step` method):**
+    *   The reward is recalculated based on the pole's angle to incentivize the
+      swing-up behavior.
+    *   The reward is `cos(pole_angle)`, where `pole_angle` is `obs[1]`. This yields:
+        *   +1 when the pole is perfectly upright (angle = 0).
+        *   -1 when the pole is hanging straight down (angle = ±π).
+        *   Values between -1 and +1 for intermediate angles.
+    *   This replaces the base environment's reward, which was +1 only for
+      maintaining the pole within a small angle (±0.2 rad) near the top.
+
+3.  **Termination Conditions (`step` method & `__init__`):**
+    *   The termination condition based on the pole angle exceeding a threshold
+      (±0.2 radians in the base environment) is disabled. This is achieved by
+      setting `terminated = False` within the `step` method after the base step
+      is called.
+    *   An attempt is made in `__init__` to set the underlying model's theta
+      threshold (`unwrapped_env.theta_threshold_radians`) to infinity, although
+      modifying underlying model parameters post-initialization might not always
+      be effective; the explicit override in `step` is the guaranteed method.
+    *   The environment still terminates if the state becomes non-finite (as in
+      the base environment) or truncates based on `max_episode_steps`.
+
+4.  **Joint Limits (`__init__` method - attempted):**
+    *   An attempt is made to modify the hinge joint's range (`model.jnt_range[1]`)
+      to `[-π, π]` to explicitly allow full rotation. The effectiveness of
+      modifying `mjModel` attributes directly after initialization can vary.
+      However, the default MuJoCo model likely allows sufficient rotation.
+
+5.  **Registration:**
+    *   The wrapped environment is registered with the ID `InvertedPendulum-SwingUp`
+      using a factory function `make_env`.
+    *   `max_episode_steps` is set to 500 for the registered environment.
+
+This wrapper facilitates reinforcement learning agents learning the swing-up
+maneuver, which requires different dynamics and reward signals compared to
+simply balancing the pendulum.
+"""
 import gymnasium as gym
 import numpy as np
 import time
@@ -101,11 +155,29 @@ class InvertedPendulumSwingUp(gym.Wrapper):
         return obs, info
     
     def step(self, action):
-        obs, reward, terminated, truncated, info = self.env.step(action)
-        
-        # Never terminate due to angle limits
+        # Call the base environment step
+        obs, _, terminated, truncated, info = self.env.step(action) # Base reward is ignored
+
+        # Extract pole angle (assuming standard observation space: [cart_pos, pole_angle, cart_vel, pole_ang_vel])
+        pole_angle = obs[1]
+
+        # Calculate swing-up reward: cos(angle)
+        # Reward is +1 when upright (angle=0), -1 when hanging down (angle=±pi)
+        reward = np.cos(pole_angle)
+
+        # Ensure termination based on angle limit is disabled
+        # Base environment terminates if abs(pole_angle) > 0.2 radians
         terminated = False
-        
+
+        # Optional: Check for non-finite states and terminate if found
+        # This retains the base environment's termination condition for instability
+        if not np.isfinite(obs).all():
+            terminated = True
+            reward = -100.0 # Apply a large negative reward for instability
+
+        # Add the custom reward to the info dict (optional)
+        info['swing_up_reward'] = reward
+
         return obs, reward, terminated, truncated, info
 
 
