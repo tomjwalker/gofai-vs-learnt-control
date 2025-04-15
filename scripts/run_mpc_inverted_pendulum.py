@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 import matplotlib.animation as animation
 from matplotlib.animation import FuncAnimation
+import imageio  # For saving video
 
 # Add the project root to the Python path
 project_root = str(Path(__file__).parent.parent)
@@ -112,17 +113,33 @@ def create_animated_diagnostics(history, episode=0):
     
     return anim
 
-def run_mpc_with_diagnostics(num_episodes=1, max_steps=1000, render_mode=None):
+def save_video(frames, filename="inverted_pendulum_control.mp4"):
+    """Save a list of frames as a video file."""
+    imageio.mimsave(filename, frames, fps=50)  # 50 fps to match MuJoCo's rendering
+
+def run_mpc_with_diagnostics(num_episodes=1, max_steps=1000, render_mode="rgb_array"):
     """
-    Run the InvertedPendulum-v4 environment with your MPCController,
+    Run the InvertedPendulum-v5 environment with your MPCController,
     collecting diagnostic data at each step and plotting afterwards.
     """
-
-    # Create the environment with optional video-friendly render mode
-    env = gym.make("InvertedPendulum-v4", render_mode=render_mode)
+    # Create the environment with video-friendly render mode
+    env = gym.make("InvertedPendulum-v5", render_mode=render_mode)
+    
+    # Initialize the viewer by rendering once
+    env.reset()
+    env.render()
+    
+    # Now we can access the viewer
+    if hasattr(env.unwrapped, 'viewer'):
+        print(f"env.unwrapped.viewer attributes: {dir(env.unwrapped.viewer)}")
+        # Adjust camera view to zoom out
+        env.unwrapped.viewer.cam.distance = 10.0  # Increase distance to zoom out
+        env.unwrapped.viewer.cam.elevation = -45  # Adjust elevation angle
+        env.unwrapped.viewer.cam.lookat = [0.0, 0.0, 0.0]  # Center the view
+    
     controller = MPCController(
-        N=20,  # Increased prediction horizon
-        dt=0.05,  # Increased timestep for better prediction
+        N=100,  # Increased prediction horizon
+        dt=0.01,  # Increased timestep for better prediction
         param_path="../src/environments/inverted_pendulum_params.json"
     )
 
@@ -132,6 +149,7 @@ def run_mpc_with_diagnostics(num_episodes=1, max_steps=1000, render_mode=None):
 
         # We'll store step-by-step data in a list of dicts
         history = []
+        frames = []  # Store video frames
 
         for step in range(max_steps):
             # 1) Compute action using your MPC's step()
@@ -150,6 +168,10 @@ def run_mpc_with_diagnostics(num_episodes=1, max_steps=1000, render_mode=None):
             #   Gym expects the action as e.g. [u_next], ensuring shape (1,)
             obs_next, reward, done, truncated, info = env.step([u_next])
             obs_next = np.array(obs_next, dtype=np.float64)
+
+            # Capture frame for video
+            frame = env.render()
+            frames.append(frame)
 
             # 3) Record data for plotting
             step_data = {
@@ -171,6 +193,11 @@ def run_mpc_with_diagnostics(num_episodes=1, max_steps=1000, render_mode=None):
                 print(f"\n[Episode {episode}] Finished in {step+1} steps, total reward = "
                       f"{sum(d['reward'] for d in history):.2f}")
                 break
+
+        # Save video
+        video_filename = f"inverted_pendulum_episode_{episode}.mp4"
+        save_video(frames, video_filename)
+        print(f"Saved video to {video_filename}")
 
         # End of episode, do some plotting
         plot_diagnostics(history, episode=episode)

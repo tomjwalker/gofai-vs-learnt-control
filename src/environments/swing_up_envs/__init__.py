@@ -1,0 +1,3 @@
+"""
+Swing-up environments package
+"""
