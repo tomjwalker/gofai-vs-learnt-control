@@ -11,6 +11,9 @@ sys.path.append(project_root)
 import gymnasium as gym
 import numpy as np
 
+# Import swing-up environments to register them
+import src.environments.swing_up_envs
+
 import matplotlib
 matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
@@ -123,7 +126,7 @@ def run_mpc_with_diagnostics(num_episodes=1, max_steps=1000, render_mode="rgb_ar
     collecting diagnostic data at each step and plotting afterwards.
     """
     # Create the environment with video-friendly render mode
-    env = gym.make("InvertedPendulum-v5", render_mode=render_mode)
+    env = gym.make("Pendulum-SwingUp", render_mode=render_mode)
     
     # Initialize the viewer by rendering once
     env.reset()
