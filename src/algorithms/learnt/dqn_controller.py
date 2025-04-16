@@ -1,31 +1,37 @@
 import random
 from collections import deque
+from typing import Tuple, List, Optional
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
 
 class ReplayBuffer:
     """
     Fixed-capacity buffer that stores tuples of (state, action, reward, next_state, done).
     """
-    def __init__(self, capacity: int):
+    def __init__(self, capacity: int) -> None:
         # Use deque as it facilitates fixed-capacity appends and pops
         self.capacity = capacity
         self.buffer = deque(maxlen=capacity)
 
 
-    def push(self, state, action, reward, next_state, done):
+    def push(self, state: np.ndarray, action: np.ndarray, reward: float, 
+             next_state: np.ndarray, done: bool) -> None:
         """
         Save a transition tuple to the buffer.
         """
         self.buffer.append((state, action, reward, next_state, done))
 
-    def can_sample(self, batch_size: int):
+    def can_sample(self, batch_size: int) -> bool:
         """
         Check if the buffer has enough transitions to sample a batch.
         """
         return len(self.buffer) >= batch_size
 
 
-    def sample(self, batch_size: int):
+    def sample(self, batch_size: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Sample a random batch of transitions.
         Returns separate lists (or arrays) for each component.
@@ -52,68 +58,92 @@ class ReplayBuffer:
         return states, actions, rewards, next_states, dones
 
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.buffer)
 
 
-if __name__ == "__main__":
-    # ===== Test the ReplayBuffer class =====
-    
-    # Instantiate the replay buffer
-    buffer = ReplayBuffer(capacity=3)
-    print("Test 1: Initialization")
-    assert len(buffer) == 0, "Buffer should be empty initially"
-    assert buffer.capacity == 3, "Buffer capacity should be 3"
-    print("✓ Passed initialization test")
+class QNetwork(nn.Module):
+    """
+    A simple MLP that outputs Q-values for each discrete action.
+    """
 
-    # Push one transition to the buffer
-    state = np.array([1.0, 2.0, 3.0, 4.0])
-    action = np.array([0.5])
-    reward = 1.0
-    next_state = np.array([1.1, 2.1, 3.1, 4.1])
-    done = False
-    
-    buffer.push(state, action, reward, next_state, done)
-    print("\nTest 2: Single push")
-    assert len(buffer) == 1, "Buffer should contain one transition"
-    print("✓ Passed single push test")
+    def __init__(self, state_dim: int, action_dim: int, hidden_dims: Tuple[int, ...] = (64, 64)) -> None:
+        super().__init__()
+        """
+        Define the NN architecture.
+        """
+        layers = []
+        input_dim = state_dim
+        for hidden_dim in hidden_dims:
 
-    # Test the can_sample method
-    print("\nTest 3: can_sample method")
-    assert not buffer.can_sample(2), "Should not be able to sample 2 transitions"
-    assert buffer.can_sample(1), "Should be able to sample 1 transition"
-    print("✓ Passed can_sample test")
+            # Add dense layer; layers are initialised automatically for nn.Linear with PyTorch defaults:
+            # - Weights: Kaiming uniform (suitable for ReLU)
+            # - Biases: Uniform in ±1/sqrt(fan_in)
+            layers.append(nn.Linear(input_dim, hidden_dim))
 
-    # Test the sample method
-    print("\nTest 4: sample method")
-    sampled_states, sampled_actions, sampled_rewards, sampled_next_states, sampled_dones = buffer.sample(1)
-    assert np.array_equal(sampled_states[0], state), "Sampled state should match pushed state"
-    assert np.array_equal(sampled_actions[0], action), "Sampled action should match pushed action"
-    assert sampled_rewards[0] == reward, "Sampled reward should match pushed reward"
-    assert np.array_equal(sampled_next_states[0], next_state), "Sampled next_state should match pushed next_state"
-    assert sampled_dones[0] == done, "Sampled done should match pushed done"
-    print("✓ Passed sample test")
+            # Add ReLU activation function
+            layers.append(nn.ReLU())
+            input_dim = hidden_dim
 
-    # Test the __len__ method
-    print("\nTest 5: __len__ method")
-    assert len(buffer) == 1, "Buffer length should be 1"
-    print("✓ Passed __len__ test")
+        # Output layer
+        layers.append(nn.Linear(input_dim, action_dim))
 
-    # Once capacity is reached, test that the oldest transitions are discarded
-    print("\nTest 6: Capacity limit")
-    # Add two more transitions
-    buffer.push(state * 2, action * 2, reward * 2, next_state * 2, not done)
-    buffer.push(state * 3, action * 3, reward * 3, next_state * 3, done)
-    assert len(buffer) == 3, "Buffer should be at capacity"
-    
-    # Add one more, should discard the oldest
-    buffer.push(state * 4, action * 4, reward * 4, next_state * 4, not done)
-    assert len(buffer) == 3, "Buffer should still be at capacity"
-    
-    # Sample all transitions and verify the oldest was discarded
-    all_states, _, _, _, _ = buffer.sample(3)
-    assert not np.array_equal(all_states[0], state), "Oldest transition should have been discarded"
-    print("✓ Passed capacity limit test")
-    
-    print("\nAll ReplayBuffer tests passed successfully!")
-    
+        # Define the network
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass through the Q-network.
+
+        Args:
+            x (torch.Tensor): A batch of input states with shape (batch_size, state_dim).
+                            Even if using a single state, it should be shaped as (1, state_dim).
+
+        Returns:
+            torch.Tensor: Q-values for each action, one row per input state.
+                        Shape: (batch_size, action_dim)
+
+        Notes:
+            - This method is called automatically when you do `q_values = model(state)`.
+            - The shape convention (batch_size, state_dim) is standard in PyTorch, even for single inputs.
+            - Use `model.eval()` and `with torch.no_grad()` during inference to disable gradients.
+        """
+        return self.net(x)
+
+
+class DQNController:
+    """
+    A DQN controller that uses a Q-network to select actions.
+    """
+    def __init__(
+            self, 
+            state_dim: int, 
+            action_dim: int, 
+            hidden_dims: Tuple[int, ...] = (64, 64),
+            lr: float = 1e-3, 
+            gamma: float = 0.99, 
+            epsilon: float = 1.0, 
+            epsilon_min: float = 0.01,
+            epsilon_decay: float = 1e-4,
+            buffer_capacity: int = 100000,
+            batch_size: int = 64,
+            target_update_interval: int = 1000
+        ) -> None:
+        """
+        Initialize the DQN controller.
+
+        Args:
+            state_dim: Dimension of the state space
+            action_dim: Dimension of the action space
+            hidden_dims: Tuple of hidden layer dimensions for the Q-network
+            lr: Learning rate for the optimizer
+            gamma: Discount factor for future rewards
+            epsilon: Initial exploration rate
+            epsilon_min: Minimum exploration rate
+            epsilon_decay: Rate at which epsilon decays
+            buffer_capacity: Maximum size of the replay buffer
+            batch_size: Number of transitions to sample for training
+            target_update_interval: Number of steps between target network updates
+        """
+        super().__init__()
+
