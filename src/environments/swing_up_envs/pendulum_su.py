@@ -62,13 +62,24 @@ class PendulumSwingUp(gym.Wrapper): # Renamed class
     """
     Wrapper for InvertedPendulum environment that modifies the reset state
     to start with the pole pointing downward instead of upward.
+    Adds different reward modes.
     """
     
-    def __init__(self, env, debug=False):
+    def __init__(self, env, debug=False, 
+                 reward_mode='cos_theta', 
+                 center_penalty_weight=0.1, 
+                 limit_penalty=10.0):
         super().__init__(env)
         self.unwrapped_env = env.unwrapped
         self.debug = debug
+        self.reward_mode = reward_mode
+        self.center_penalty_weight = center_penalty_weight
+        self.limit_penalty = limit_penalty
+        self.cart_limit = 1.0 # Known from XML
         
+        if self.debug:
+            print(f"PendulumSwingUp Initialized. Reward Mode: {self.reward_mode}, Center Penalty: {self.center_penalty_weight}, Limit Penalty: {self.limit_penalty}")
+
         # Attempt to modify parameters to prevent termination based on angle limits
         # Note: Overriding terminated=False in step() is the more robust way
         try:
@@ -178,9 +189,34 @@ class PendulumSwingUp(gym.Wrapper): # Renamed class
              if self.debug: print("Error: Observation space does not seem to contain pole angle at index 1.")
              pole_angle = 0 # Default to upright if error occurs
 
-        # Calculate swing-up reward: cos(angle)
-        # Reward is +1 when upright (angle=0), -1 when hanging down (angle=±pi)
-        reward = np.cos(pole_angle)
+        # Calculate swing-up reward based on mode
+        base_reward = np.cos(pole_angle)
+        reward = base_reward
+        
+        info['reward_cos_theta'] = base_reward
+        center_penalty = 0.0
+        at_limit_penalty = 0.0
+
+        if self.reward_mode == 'cos_theta_centered':
+            # Get cart position
+            try:
+                cart_pos = obs[0]
+            except IndexError:
+                if self.debug: print("Error: Observation space does not seem to contain cart position at index 0.")
+                cart_pos = 0.0
+                
+            # Centering penalty
+            center_penalty = self.center_penalty_weight * abs(cart_pos)
+            reward -= center_penalty
+            
+            # Limit penalty (apply if very close to or at the limit)
+            if abs(cart_pos) >= (self.cart_limit - 0.01):
+                 at_limit_penalty = self.limit_penalty
+                 reward -= at_limit_penalty
+                 if self.debug and abs(cart_pos) >= self.cart_limit: print("Limit penalty applied!")
+        
+        info['reward_center_penalty'] = center_penalty
+        info['reward_limit_penalty'] = at_limit_penalty
 
         # Ensure termination based on angle limit is disabled
         # Base environment terminates if abs(pole_angle) > 0.2 radians
@@ -192,7 +228,6 @@ class PendulumSwingUp(gym.Wrapper): # Renamed class
             reward = -100.0 # Apply a large negative reward for instability
             if self.debug: print("Terminating due to non-finite observation.")
 
-
         # Add the custom reward to the info dict (optional, for monitoring)
         info['swing_up_reward'] = reward
 
@@ -200,17 +235,48 @@ class PendulumSwingUp(gym.Wrapper): # Renamed class
 
 
 # Create the factory function
-def make_env(render_mode=None, debug=False):
-    # Creates the base InvertedPendulum environment
-    base_env = gym.make('InvertedPendulum-v5', render_mode=render_mode)
-    # Wraps it with our swing-up modifications
-    return PendulumSwingUp(base_env, debug=debug) # Use renamed class
+def make_env(render_mode=None, debug=False, camera_config=None, 
+             reward_mode='cos_theta', center_penalty_weight=0.1, limit_penalty=10.0):
+    """
+    Factory function to create the PendulumSwingUp environment.
+    
+    Args:
+        render_mode (str, optional): The render mode for the base environment.
+        debug (bool, optional): Enable debug printing in the wrapper.
+        camera_config (dict, optional): Configuration for the MuJoCo camera.
+        reward_mode (str): The reward calculation mode ('cos_theta' or 'cos_theta_centered').
+        center_penalty_weight (float): Weight for the cart centering penalty.
+        limit_penalty (float): Penalty for hitting the cart position limits.
+
+    Returns:
+        PendulumSwingUp: The wrapped environment instance.
+    """
+    # Creates the base InvertedPendulum environment, passing camera_config
+    # Only pass camera_config if render_mode is also set, as it's MuJoCo specific
+    env_kwargs = {'render_mode': render_mode}
+    if render_mode is not None and camera_config is not None:
+        # Use the correct argument name for the base MuJoCo env
+        env_kwargs['default_camera_config'] = camera_config 
+        
+    base_env = gym.make('InvertedPendulum-v5', **env_kwargs)
+    # Wraps it with our swing-up modifications, passing reward params
+    return PendulumSwingUp(base_env, debug=debug, 
+                         reward_mode=reward_mode, 
+                         center_penalty_weight=center_penalty_weight, 
+                         limit_penalty=limit_penalty)
 
 # Register the environment
 register(
     id='Pendulum-SwingUp', # Renamed ID
     entry_point=make_env, # Points to our factory function
     max_episode_steps=500, # Standard truncation length
+    kwargs={ # Default arguments for the factory function
+        'reward_mode': 'cos_theta',
+        'center_penalty_weight': 0.1,
+        'limit_penalty': 10.0,
+        'debug': False,
+        'camera_config': None
+    } 
 )
 
 
