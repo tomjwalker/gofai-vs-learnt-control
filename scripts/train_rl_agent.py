@@ -100,7 +100,7 @@ def get_run_id(config):
     
     return f"{timestamp}_{config_hash}"
 
-def train(config, seed):
+def train(config, seed, run_dir):
     """Train the RL agent for one session."""
     
     # --- Set Seed ---
@@ -108,11 +108,17 @@ def train(config, seed):
     print(f"\n--- Starting Training Session with Seed: {seed} ---")
 
     # --- Environment Setup ---
+    env_kwargs = {}
+    if config.env_id == 'Pendulum-SwingUp':
+        env_kwargs['reward_mode'] = config.reward_mode
+        env_kwargs['center_penalty_weight'] = config.center_penalty_weight
+        env_kwargs['limit_penalty'] = config.limit_penalty
+        print(f"Using Pendulum-SwingUp specific kwargs: {env_kwargs}")
+        
     try:
-        env = gym.make(config.env_id)
+        env = gym.make(config.env_id, **env_kwargs)
     except gym.error.Error as e:
-        print(f"Error creating environment {config.env_id}: {e}")
-        print("Please ensure the environment ID is correct and registered.")
+        print(f"Error creating environment {config.env_id} with kwargs {env_kwargs}: {e}")
         sys.exit(1)
 
     # Get state dimension (assuming Box observation space)
@@ -203,16 +209,14 @@ def train(config, seed):
     print(f"Training finished after {config.episodes} episodes and {total_steps} steps.")
 
     # --- Saving Model ---
-    save_path = Path(config.save_path)
-    save_path.parent.mkdir(parents=True, exist_ok=True) # Ensure directory exists
-    torch.save(agent.q_net.state_dict(), save_path)
-    print(f"Trained model saved to: {save_path}")
+    session_model_save_path = run_dir / "models" / f"{Path(config.save_path).stem}_seed{seed}{Path(config.save_path).suffix}"
+    session_model_save_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(agent.q_net.state_dict(), session_model_save_path)
+    print(f"Trained model saved to: {session_model_save_path}")
 
     # --- Plotting Rewards ---
-    plot_save_path = Path(config.plot_save_path)
-    # Modify plot path for individual session
-    plot_filename = f"{plot_save_path.stem}_seed{seed}{plot_save_path.suffix}"
-    session_plot_save_path = plot_save_path.parent / plot_filename
+    plot_save_path = run_dir / "plots" / Path(config.plot_save_path).name # Use run_dir
+    session_plot_save_path = plot_save_path.parent / plot_save_path.name
     session_plot_save_path.parent.mkdir(parents=True, exist_ok=True)
 
     plt.figure(figsize=(12, 6))
@@ -262,6 +266,11 @@ if __name__ == "__main__":
     # Plotting Args
     parser.add_argument("--plot-save-path", type=str, default="plots/dqn_rewards.png", help="Base path to save the reward plot(s)")
 
+    # --- Custom Env Args (Pendulum-SwingUp specific) ---
+    parser.add_argument("--reward-mode", type=str, default='cos_theta', choices=['cos_theta', 'cos_theta_centered'], help="Reward mode for Pendulum-SwingUp env")
+    parser.add_argument("--center-penalty-weight", type=float, default=0.1, help="Weight for center penalty in Pendulum-SwingUp")
+    parser.add_argument("--limit-penalty", type=float, default=10.0, help="Penalty for hitting limits in Pendulum-SwingUp")
+
     # Multi-session Args
     parser.add_argument("--num-sessions", type=int, default=1, help="Number of independent training sessions to run")
     parser.add_argument("--base-seed", type=int, default=None, help="Base random seed for reproducibility. If None, random seeds are used.")
@@ -293,6 +302,9 @@ if __name__ == "__main__":
     # Save configuration to a JSON file
     config_to_save = vars(args).copy()
     config_to_save['hidden_dims'] = list(config_to_save['hidden_dims'])  # Convert tuple to list for JSON
+    # Clean up args that are not hyperparameters before saving
+    config_to_save.pop('num_sessions', None)
+    config_to_save.pop('base_seed', None)
     
     config_file = run_dir / "config.json"
     with open(config_file, 'w') as f:
@@ -309,17 +321,9 @@ if __name__ == "__main__":
     for i in range(args.num_sessions):
         session_seed = args.base_seed + i if args.base_seed is not None else random.randint(0, 1000000)
         
-        # Modify save paths for the current session
-        args.save_path = str(base_save_path.parent / f"{base_save_path.stem}_seed{session_seed}{base_save_path.suffix}")
-        args.plot_save_path = str(base_plot_path) # Pass base path, train fn modifies it
-
-        # Run training for one session
-        session_rewards = train(args, session_seed)
+        # Run training for one session, passing run_dir
+        session_rewards = train(args, session_seed, run_dir)
         all_sessions_rewards.append(session_rewards)
-
-        # Restore original base paths for next iteration (cleanliness)
-        args.save_path = str(base_save_path)
-        args.plot_save_path = str(base_plot_path)
 
     print(f"\n--- Completed {args.num_sessions} Training Session(s) ---")
 
@@ -335,7 +339,7 @@ if __name__ == "__main__":
 
         episodes = np.arange(1, min_len + 1)
 
-        agg_plot_save_path = base_plot_path.parent / f"{base_plot_path.stem}_aggregate{base_plot_path.suffix}"
+        agg_plot_save_path = plots_dir / f"{original_plot_path.stem}_aggregate{original_plot_path.suffix}"
         agg_plot_save_path.parent.mkdir(parents=True, exist_ok=True)
 
         plt.figure(figsize=(12, 6))

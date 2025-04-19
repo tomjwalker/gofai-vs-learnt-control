@@ -16,6 +16,7 @@ from pathlib import Path
 import gymnasium as gym
 import torch
 import numpy as np
+from gymnasium.wrappers import RecordVideo # Added for video recording
 
 # Add project root to Python path
 project_root = str(Path(__file__).resolve().parent.parent)
@@ -27,13 +28,38 @@ from src.algorithms.learnt.dqn_controller import DQNController
 from src.environments.wrappers import DiscretizeActionWrapper
 import src.environments.swing_up_envs # To register custom envs
 
-def evaluate(config, model_state_dict, eval_episodes):
+def evaluate(config, model_state_dict, eval_episodes, run_dir):
     """Evaluate the agent with a deterministic policy."""
     print(f"\n--- Starting Evaluation ({eval_episodes} episodes) ---")
     
     # --- Environment Setup ---
+    render_mode = 'rgb_array' if config.get('record_video', False) else None
+    
+    camera_config = None
+    if render_mode == 'rgb_array':
+        camera_config = {
+            "distance": 3.5,  # Zoom out further than default
+            # "azimuth": 0,     # Default is usually fine
+            # "elevation": -20, # Default is usually fine
+            # "lookat": np.array([0.0, 0.0, 0.0]), # Default lookat
+        }
+        print(f"Using custom camera config for recording: {camera_config}")
+        
+    env_kwargs = {}
+    if config.get('env_id') == 'Pendulum-SwingUp':
+        # Get reward mode and penalty weights from loaded config, using defaults if missing
+        env_kwargs['reward_mode'] = config.get('reward_mode', 'cos_theta')
+        env_kwargs['center_penalty_weight'] = config.get('center_penalty_weight', 0.1)
+        env_kwargs['limit_penalty'] = config.get('limit_penalty', 10.0)
+        print(f"Using Pendulum-SwingUp specific kwargs: {env_kwargs}")
+        
     try:
-        env = gym.make(config['env_id'])
+        env_kwargs['render_mode'] = render_mode
+        if render_mode and camera_config:
+             env_kwargs['camera_config'] = camera_config 
+             
+        env = gym.make(config['env_id'], **env_kwargs)
+
     except gym.error.Error as e:
         print(f"Error creating environment {config['env_id']}: {e}")
         sys.exit(1)
@@ -55,6 +81,17 @@ def evaluate(config, model_state_dict, eval_episodes):
         pass 
         
     print(f"Environment: {config['env_id']}, State dim: {state_dim}, Action dim: {action_dim}")
+
+    # --- Video Recording Setup (Optional) ---
+    if config.get('record_video', False):
+        video_folder = run_dir / "videos"
+        video_folder.mkdir(exist_ok=True)
+        print(f"Recording videos to: {video_folder}")
+        # Record the first 3 episodes
+        env = RecordVideo(env, video_folder=str(video_folder), 
+                          episode_trigger=lambda ep_id: ep_id < 3, 
+                          name_prefix=f"eval-{config['env_id']}")
+        # Note: RecordVideo might handle render calls, check behavior if using manual render
 
     # --- Agent Setup ---
     # Use loaded config parameters
@@ -117,10 +154,15 @@ if __name__ == "__main__":
     parser.add_argument("--model-path", type=str, default=None, help="Direct path to the trained model (.pth file). Assumes config.json is in the parent directory.")
     
     parser.add_argument("--eval-episodes", type=int, default=100, help="Number of episodes to run evaluation for.")
+    parser.add_argument('--record-video', action='store_true', help="Record videos of the first few evaluation episodes.")
     
     # Optional overrides if config.json is missing or needs changing
     parser.add_argument("--env-id", type=str, default=None, help="Override environment ID from config.")
     parser.add_argument("--n-discrete-actions", type=int, default=None, help="Override number of discrete actions from config.")
+    # Add args to override reward params for Pendulum-SwingUp if config is missing/wrong
+    parser.add_argument("--reward-mode", type=str, default=None, choices=['cos_theta', 'cos_theta_centered'], help="Override reward mode for Pendulum-SwingUp env")
+    parser.add_argument("--center-penalty-weight", type=float, default=None, help="Override center penalty weight for Pendulum-SwingUp")
+    parser.add_argument("--limit-penalty", type=float, default=None, help="Override limit penalty for Pendulum-SwingUp")
 
     args = parser.parse_args()
 
@@ -159,6 +201,10 @@ if __name__ == "__main__":
         config_path = run_dir / "config.json"
         print(f"Using model path: {model_path}")
 
+    if not run_dir:
+        print("Error: Could not determine run directory for saving videos/configs.")
+        sys.exit(1)
+
     # Load configuration
     if not config_path or not config_path.is_file():
         print(f"Warning: config.json not found at {config_path}")
@@ -169,6 +215,9 @@ if __name__ == "__main__":
         with open(config_path, 'r') as f:
             loaded_config = json.load(f)
             
+    # Add record_video flag to config
+    loaded_config['record_video'] = args.record_video 
+
     # --- Determine Action Dimension from Config --- 
     # Necessary for agent init before loading state_dict
     # Attempt to find original action_dim if saved, otherwise infer based on discretisation
@@ -191,6 +240,12 @@ if __name__ == "__main__":
     if args.n_discrete_actions:
         loaded_config['n_discrete_actions'] = args.n_discrete_actions
         loaded_config['action_dim'] = args.n_discrete_actions # Assume discretisation overrides
+    if args.reward_mode:
+        loaded_config['reward_mode'] = args.reward_mode
+    if args.center_penalty_weight is not None:
+        loaded_config['center_penalty_weight'] = args.center_penalty_weight
+    if args.limit_penalty is not None:
+        loaded_config['limit_penalty'] = args.limit_penalty
         
     # Ensure required keys for DQNController are present
     required_keys = ['hidden_dims', 'lr', 'gamma', 'epsilon', 'epsilon_min', 'epsilon_decay', 'buffer_capacity', 'batch_size', 'target_update_interval']
@@ -210,5 +265,5 @@ if __name__ == "__main__":
     # If you train on GPU and eval on CPU, add map_location='cpu'
     model_state_dict = torch.load(model_path, map_location=torch.device('cpu')) 
 
-    # Run evaluation
-    evaluate(loaded_config, model_state_dict, args.eval_episodes) 
+    # Run evaluation, passing the run_dir for potential video saving
+    evaluate(loaded_config, model_state_dict, args.eval_episodes, run_dir) 
