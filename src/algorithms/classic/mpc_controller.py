@@ -91,7 +91,7 @@ def build_mpc_solver(
         # X[:, k] is the current state
         # U[:, k] is the current control input
         # X[:, k + 1] = pendulum_dynamics(X[:, k], U[:, k], dt, params) is the next state predicted by the dynamics
-        X_next = pendulum_dynamics(X[:, k], U[:, k], dt, params)
+        X_next = pendulum_dynamics(X[:, k], U[:, k], dt, params, integration_method='rk4')
 
         # Enforce that the predicted state equals the decision variable for the next timestep
         dynamics_constraints.append(X[:, k + 1] - X_next)
@@ -124,10 +124,17 @@ def build_mpc_solver(
 
     # Solver options
     opts = {
-        "ipopt.print_level": 0,
-        "ipopt.tol": 1e-4,
-        "ipopt.max_iter": 100,
-        "print_time": False
+        "ipopt.print_level": 5,  # Increased to see more detailed output
+        "ipopt.tol": 1e-6,  # Tighter tolerance
+        "ipopt.max_iter": 200,  # More iterations allowed
+        "ipopt.linear_solver": "mumps",  # Use MUMPS which comes with CasADi
+        "ipopt.hessian_approximation": "limited-memory",  # Better for large problems
+        "print_time": True,
+        "ipopt.warm_start_init_point": "yes",  # Enable warm start
+        "ipopt.mu_strategy": "adaptive",  # Better convergence
+        "ipopt.ma57_automatic_scaling": "yes",  # Better numerical stability
+        "ipopt.sb": "yes",  # Suppress banner
+        "ipopt.max_cpu_time": 1.0  # Limit solve time to 1 second
     }
 
     # Create an IPOPT solver instance
@@ -167,15 +174,15 @@ class MPCController:
         self.N = N
         self.dt = dt
 
-        # Define cost matrices
-        self.Q = ca.diag([1.0, 10.0, 0.1, 0.1])
-        self.R = ca.DM([0.01])
-        self.Q_terminal = self.Q
+        # Define cost matrices with higher weights on angle and terminal cost
+        self.Q = ca.diag([1.0, 50.0, 10.0, 50.0])  # [x, theta, x_dot, theta_dot] - increased velocity weights
+        self.R = ca.DM([1.0])  # Increased control weight to discourage saturation
+        self.Q_terminal = 5.0 * self.Q  # Reduced terminal cost multiplier
 
-        # Define reference state
+        # Define reference state (upright position)
         self.X_ref = ca.DM.zeros(4, 1)
 
-        # Build solver
+        # Build solver with tighter tolerances
         self.solver, self.X, self.U, self.X_init, self.lbx, self.ubx = build_mpc_solver(
             self.params, self.N, self.dt, self.Q, self.R, self.Q_terminal, self.X_ref
         )
@@ -225,7 +232,6 @@ class MPCController:
         X_guess[:, :-1] = self.X_prev[:, 1:]  # Shift everything left
         X_guess[:, -1] = self.X_prev[:, -1]  # Replicate last column
         # override X[:, 0] with x0
-        x0 = x0.reshape(-1, 1)
         X_guess[:, 0] = x0
 
         # Warm start guess for U
@@ -286,10 +292,14 @@ class MPCController:
         # E.g. a vector of (4,), a vector of (4, 1) and a vector of (1, 4) will all have the same (4, ) shape after
         # ravel
 
-        # === Extract U from solver output ===
+        # Print solver diagnostics if available
+        if "f" in solution:
+            print(f"Cost: {solution['f']}")
+        if "g" in solution:
+            constraint_violation = np.max(np.abs(solution['g']))
+            print(f"Max constraint violation: {constraint_violation}")
 
-        # N.B. <output>.full() converts the typically casadi-type output of the solver to a NumPy array
-        # N.B. <output>.flatten() then ensures this is a 1D array
+        # === Extract U from solver output ===
         optimal_vars = solution["x"].full().flatten()
 
         # - The solver returns the optimal output in the same stacked column vector form as the input
@@ -298,17 +308,25 @@ class MPCController:
         width_x = self.N + 1
         width_u = self.N
         idx_last_x = len_x * width_x
-        X_solution = optimal_vars[:idx_last_x].reshape((width_x, len_x)).T    # TODO why this way then transpose?
+        X_solution = optimal_vars[:idx_last_x].reshape((width_x, len_x)).T
         U_solution = optimal_vars[idx_last_x:].reshape((width_u, 1)).T
 
         # Separate out the immediate timestep's control signal, for convenience
         u_next = float(U_solution[0, 0])
 
+        # Print some diagnostics about the solution
+        print(f"Initial state: {x0}")
+        print(f"First control: {u_next}")
+        print(f"Final predicted state: {X_solution[:, -1]}")
+        print(f"Max control in horizon: {np.max(np.abs(U_solution))}")
+
         # Collate all useful outputs into a dict
         solver_outputs = {
             "X_solution": X_solution,
             "U_solution": U_solution,
-            "u_next": u_next
+            "u_next": u_next,
+            "cost": float(solution["f"]) if "f" in solution else None,
+            "constraint_violation": float(np.max(np.abs(solution["g"]))) if "g" in solution else None
         }
 
         # === Update self.X_prev and self.U_prev attributes ===
