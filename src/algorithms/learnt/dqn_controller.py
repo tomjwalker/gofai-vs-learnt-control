@@ -124,9 +124,18 @@ class DQNController:
     # ------------------------------------------------
     #  Interaction
     # ------------------------------------------------
-    def select_action(self, state):
-        """Epsilon‑greedy action selection."""
-        if random.random() < self.epsilon:
+    def select_action(self, state, eval_mode=False):
+        """
+        Selects an action using an epsilon-greedy policy.
+
+        Args:
+            state: The current state observation.
+            eval_mode (bool): If True, always select the greedy action (epsilon=0).
+
+        Returns:
+            int: The selected action.
+        """
+        if not eval_mode and random.random() < self.epsilon:
             return random.randrange(self.action_dim)
         with torch.no_grad():
             state_tensor = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0)
@@ -140,9 +149,13 @@ class DQNController:
     #  Learning step
     # ------------------------------------------------
     def update(self):
-        """Perform one TD update if the buffer has enough samples."""
-        if len(self.buffer) < self.batch_size:
-            return
+        """
+        Updates the Q-network using a batch sampled from the replay buffer.
+        Decreases epsilon after each update.
+        Updates the target network periodically.
+        """
+        if not self.buffer.can_sample(self.batch_size):
+            return # Not enough samples in buffer yet
 
         self.learn_step_counter += 1
         states, actions, rewards, next_states, dones = self.buffer.sample(self.batch_size)
@@ -175,5 +188,6 @@ class DQNController:
         if self.learn_step_counter % self.target_update_interval == 0:
             self.target_net.load_state_dict(self.q_net.state_dict())
 
-        # Decay epsilon (per‑step)
-        self.epsilon = max(self.epsilon * (1 - self.epsilon_decay), self.epsilon_min)
+        # Decay epsilon (only if not in pure evaluation mode)
+        if self.epsilon > self.epsilon_min:
+           self.epsilon = max(self.epsilon_min, self.epsilon * (1 - self.epsilon_decay))
