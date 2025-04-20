@@ -13,8 +13,58 @@ from src.environments.casadi_dynamics import pendulum_dynamics
 # TODO: remove hardcoded path
 # Set working directory to the root of the project, without any relative path logic
 import os
-os.chdir(os.path.join(os.path.dirname(__file__), "../.."))
-print(os.getcwd())
+# os.chdir(os.path.join(os.path.dirname(__file__), "../..")) # Commented out, paths should be relative to project root
+# print(os.getcwd())
+
+def build_mpc_bounds(state_bounds_obs: list, control_bounds: list, N: int, 
+                       joint_bounds: dict = None) -> Tuple[list, list]:
+    """
+    Construct lists of lower and upper bounds for the stacked state (X) 
+    and control (U) trajectory variables used in the NLP.
+
+    Uses physical joint bounds where available, otherwise observation bounds.
+
+    Args:
+        state_bounds_obs: Bounds from the environment's observation space [[min, max], ...].
+        control_bounds: Bounds for the control inputs [[min, max], ...].
+        N: MPC prediction horizon.
+        joint_bounds: Dictionary of physical joint limits {state_name: [min, max]}.
+
+    Returns:
+        Tuple[list, list]: lbx, ubx lists for the NLP solver.
+    """
+    lbx, ubx = [], []
+    joint_bounds = joint_bounds or {}
+    
+    # State bounds (X trajectory, shape 4 x N+1)
+    num_states = len(state_bounds_obs)
+    state_names = ['cart_pos', 'pole_angle', 'cart_vel', 'pole_ang_vel'] # Assuming this order
+    
+    for k in range(N + 1):  # Iterate over timesteps
+        for i in range(num_states):  # Iterate over states (x, theta, x_dot, theta_dot)
+            state_name = state_names[i]
+            # Use specific joint bound if available, otherwise use observation space bound
+            if state_name in joint_bounds:
+                lb, ub = joint_bounds[state_name]
+            else:
+                lb, ub = state_bounds_obs[i]
+                
+            # Use -inf/inf from numpy if needed, converting json's "Infinity" string
+            lb = -np.inf if lb == -float('inf') else lb
+            ub = np.inf if ub == float('inf') else ub
+            
+            lbx.append(lb)
+            ubx.append(ub)
+            
+    # Control bounds (U trajectory, shape 1 x N)
+    num_controls = len(control_bounds)
+    for _ in range(N): # Iterate over timesteps
+        for i in range(num_controls):
+            lb, ub = control_bounds[i]
+            lbx.append(lb)
+            ubx.append(ub)
+
+    return lbx, ubx
 
 
 def build_mpc_solver(
@@ -100,10 +150,13 @@ def build_mpc_solver(
     dynamics_constraints = ca.vertcat(initial_state_constraint, *dynamics_constraints)
 
     # === Build bounds on state and control vectors ===
-
-    state_bounds = params["state_bounds"]
-    control_bounds = params["control_bounds"]
-    lbx, ubx = build_mpc_bounds(state_bounds, control_bounds, N)
+    # Use the updated build_mpc_bounds which prioritizes physical joint limits
+    lbx, ubx = build_mpc_bounds(
+        params["state_bounds_obs"], # Pass obs bounds
+        params["control_bounds"], 
+        N, 
+        params.get("joint_bounds") # Pass physical joint bounds if they exist
+    )
 
     # === Compile the NLP problem ===
 
@@ -155,9 +208,9 @@ class MPCController:
     """
 
     def __init__(self,
-                 N: int = 10,
-                 dt: float = 0.05,
-                 param_path: str = "environments/inverted_pendulum_params.json"):
+                 N: int = 50,
+                 dt: float = 0.02,
+                 param_path: str = "src/environments/inverted_pendulum_params.json"):
         """
         Initialise MPC with problem horizon, timestep, and physical parameters.
         - Loads environment parameters
@@ -176,7 +229,7 @@ class MPCController:
 
         # Define cost matrices with higher weights on angle and terminal cost
         self.Q = ca.diag([1.0, 50.0, 10.0, 50.0])  # [x, theta, x_dot, theta_dot] - increased velocity weights
-        self.R = ca.DM([1.0])  # Increased control weight to discourage saturation
+        self.R = ca.DM([10.0])
         self.Q_terminal = 5.0 * self.Q  # Reduced terminal cost multiplier
 
         # Define reference state (upright position)

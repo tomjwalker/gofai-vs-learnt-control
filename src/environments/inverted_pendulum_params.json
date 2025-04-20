@@ -5,7 +5,7 @@
   "pole_half_length": 0.3000004166663773,
   "pole_length": 0.6000008333327546,
   "gravity": 9.81,
-  "state_bounds": [
+  "state_bounds_obs": [
     [
       -Infinity,
       Infinity
@@ -23,6 +23,16 @@
       Infinity
     ]
   ],
+  "joint_bounds": {
+    "cart_pos": [
+      -1.0,
+      1.0
+    ],
+    "pole_angle": [
+      -1.5707963267948966,
+      1.5707963267948966
+    ]
+  },
   "control_bounds": [
     [
       -3.0,
