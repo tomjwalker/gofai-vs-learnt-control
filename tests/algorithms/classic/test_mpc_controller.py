@@ -2,10 +2,15 @@ import pytest
 import numpy as np
 import casadi as ca
 import os
+import sys # Import sys
 
 # Ensure the working directory is the project root when running tests
 # This allows consistent relative path access (e.g., to param files)
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
+# Add project root to Python path
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT) 
+
 os.chdir(PROJECT_ROOT)
 
 from src.algorithms.classic.mpc_controller import MPCController
@@ -102,5 +107,69 @@ def test_get_guesses_dispatch(mpc_controller, sample_state):
     np.testing.assert_array_almost_equal(X_guess_warm, expected_X_warm)
     np.testing.assert_array_almost_equal(U_guess_warm, expected_U_warm)
 
-# TODO: Add tests for solve() and step() methods (might require mocking solver)
+def test_solve_structure(mpc_controller, sample_state):
+    """Test the basic structure and types of the solve() output."""
+    # We don't mock the solver here, just run it once.
+    # This implicitly tests build_mpc_solver structure as well.
+    # It might be slow and depends on IPOPT being available.
+    # If IPOPT isn't easily available in test env, this test might need mocking.
+    try:
+        solver_outputs = mpc_controller.solve(sample_state)
+    except Exception as e:
+        pytest.fail(f"mpc_controller.solve() raised an exception: {e}")
+
+    # Check required keys are present
+    assert "X_solution" in solver_outputs
+    assert "U_solution" in solver_outputs
+    assert "u_next" in solver_outputs
+    assert "cost" in solver_outputs
+    assert "constraint_violation" in solver_outputs
+    assert "solver_status" in solver_outputs
+
+    # Check basic types and shapes if solve succeeded
+    if solver_outputs["solver_status"] != "failed" and solver_outputs["X_solution"] is not None:
+        assert isinstance(solver_outputs["X_solution"], np.ndarray)
+        assert solver_outputs["X_solution"].shape == (4, mpc_controller.N + 1)
+        assert isinstance(solver_outputs["U_solution"], np.ndarray)
+        assert solver_outputs["U_solution"].shape == (1, mpc_controller.N)
+        assert isinstance(solver_outputs["u_next"], float)
+        assert isinstance(solver_outputs["cost"], float)
+        assert isinstance(solver_outputs["constraint_violation"], float)
+        assert isinstance(solver_outputs["solver_status"], str)
+    elif solver_outputs["solver_status"] == "failed":
+        # Check fallback values for failure case
+        assert solver_outputs["X_solution"] is None
+        assert solver_outputs["U_solution"] is None
+        assert solver_outputs["u_next"] == 0.0
+        assert solver_outputs["cost"] == np.inf
+        assert solver_outputs["constraint_violation"] == np.inf
+
+def test_step_basic(mpc_controller, sample_state):
+    """Test that step() returns a float control value."""
+    try:
+        control_value = mpc_controller.step(sample_state)
+        assert isinstance(control_value, float)
+    except Exception as e:
+        pytest.fail(f"mpc_controller.step() raised an exception: {e}")
+
+def test_step_solver_failure(mpc_controller, sample_state, mocker):
+    """Test that step() returns 0.0 if solve() indicates failure."""
+    # Mock the internal solve method to simulate failure
+    failed_output = {
+        "X_solution": None, 
+        "U_solution": None,
+        "u_next": 0.0, 
+        "cost": np.inf,
+        "constraint_violation": np.inf,
+        "solver_status": "failed" # Simulate failure status
+    }
+    mocker.patch.object(mpc_controller, 'solve', return_value=failed_output)
+    
+    control_value = mpc_controller.step(sample_state)
+    assert control_value == 0.0
+    # Check that previous solution was reset on failure
+    assert mpc_controller.X_prev is None 
+    assert mpc_controller.U_prev is None
+
+# TODO: Add tests for edge cases / potential failures in solve/step
 # TODO: Add tests for edge cases / potential failures 
