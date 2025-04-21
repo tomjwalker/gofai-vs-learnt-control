@@ -140,11 +140,9 @@ if __name__ == "__main__":
     # --- Configuration ---
     ENV_ID = "InvertedPendulum-v5"
     PARAM_PATH = "src/environments/inverted_pendulum_params.json"
-    DT = 0.02  # Simulation timestep (Should match env.dt)
-    SIM_STEPS = 5000  # Number of simulation steps (e.g., 100 seconds)
-    # Define separate initial state for CasADi to ensure perturbation
+    SIM_STEPS = 2500  # Reduced steps for faster visualization (e.g., 100 seconds if dt=0.04)
     CASADI_INITIAL_STATE = np.array([0.0, 0.1, 0.0, 0.0]) 
-    CONTROL_INPUT = np.array([0.0]) # Zero control for comparison
+    CONTROL_INPUT = np.array([0.0]) 
     INTEGRATION_METHOD = 'rk4'
 
     # --- Load Parameters for CasADi ---
@@ -156,15 +154,15 @@ if __name__ == "__main__":
 
     # --- Simulate Gymnasium Environment ---
     print(f"Simulating Gym environment '{ENV_ID}' for {SIM_STEPS} steps using wrapper...")
-    # Use the wrapper
     env = InvertedPendulumComparisonWrapper(gym.make(ENV_ID))
-    # Reset using the wrapper's method to set the initial state
+    
+    # --- Get the ACTUAL timestep from the environment ---
+    DT = env.unwrapped.dt # Access dt from the unwrapped environment
+    print(f"Using environment timestep DT = {DT}")
+    # Adjust SIM_STEPS if needed based on DT, e.g. SIM_STEPS = int(100 / DT)
+    
     obs_gym, info_gym = env.reset(initial_state=CASADI_INITIAL_STATE)
-    print(f"Gym reset state: {obs_gym}") # Should now reflect the set state
-
-    # Gym state needs careful handling: obs is [x, sin, cos, xdot, tdot]
-    # We need [x, theta, xdot, tdot] for comparison plots if needed later,
-    # but for storing raw simulation data, store the observation directly.
+    print(f"Gym reset state: {obs_gym}")
     gym_states = np.zeros((SIM_STEPS + 1, len(obs_gym))) # Store raw observations
     gym_states[0, :] = obs_gym
     for i in range(SIM_STEPS):
@@ -180,13 +178,14 @@ if __name__ == "__main__":
     env.close()
     print("Gym simulation complete.")
 
-    # --- Setup CasADi Function ---
+    # --- Setup CasADi Function (Ensure DT is passed correctly) ---
     x_sym = ca.SX.sym('x', 4)
     u_sym = ca.SX.sym('u', 1)
+    # Pass the correct DT obtained from env
     x_next_sym = pendulum_dynamics(x_sym, u_sym, DT, params, integration_method=INTEGRATION_METHOD)
     dynamics_func = ca.Function('dynamics', [x_sym, u_sym], [x_next_sym])
 
-    # --- Simulate CasADi Dynamics ---
+    # --- Simulate CasADi Dynamics (uses the correct DT now) ---
     print(f"Simulating CasADi model for {SIM_STEPS} steps...")
     casadi_states = np.zeros((SIM_STEPS + 1, 4)) 
     casadi_states[0, :] = CASADI_INITIAL_STATE 
@@ -209,7 +208,7 @@ if __name__ == "__main__":
     max_height_first_swing = pole_vis_length * np.cos(max_theta_first_swing) 
     print(f"Max CasADi angle in first ~{first_swing_steps*DT:.2f}s: {np.rad2deg(max_theta_first_swing):.2f} deg")
 
-    # --- Setup Animation (Shows CasADi simulation only) ---
+    # --- Setup Animation (Uses DT for interval) ---
     fig, ax = plt.subplots()
     ax.set_aspect('equal')
     ax.set_xlabel("Cart Position (m)")
@@ -264,9 +263,9 @@ if __name__ == "__main__":
 
     print("Visualization closed.")
 
-    # --- Generate Static State Plots (Comparison) ---
+    # --- Generate Static State Plots (Uses correct DT for time_vector) ---
     print("Generating comparison state plots...")
-    time_vector = np.arange(SIM_STEPS + 1) * DT
+    time_vector = np.arange(SIM_STEPS + 1) * DT # Uses correct DT
     fig_states, axs = plt.subplots(4, 1, sharex=True, figsize=(10, 8))
     fig_states.suptitle('State Variables vs Time: CasADi Model vs Gym Simulation')
 
