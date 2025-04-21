@@ -167,10 +167,11 @@ def run_mpc_with_diagnostics(num_episodes=1, max_steps=1000, render_mode="rgb_ar
             u_next = solver_outputs["u_next"]     # float
 
             # Print MPC diagnostics
-            print(f"\nStep {step}:")
-            print(f"Cost: {solver_outputs['cost']:.2f}")
-            print(f"Constraint violation: {solver_outputs['constraint_violation']:.2e}")
-            print(f"Max control in horizon: {np.max(np.abs(U_sol)):.2f}")
+            print(f"Step {step}: Obs={np.array2string(obs, precision=2, floatmode='fixed')}", end='')
+            # Cost and violation are now printed inside solve()
+            # print(f"Cost: {solver_outputs['cost']:.2f}")
+            # print(f"Constraint violation: {solver_outputs['constraint_violation']:.2e}")
+            # print(f"Max control in horizon: {np.max(np.abs(U_sol)):.2f}")
 
             # 2) Step environment
             #   Gym expects the action as e.g. [u_next], ensuring shape (1,)
