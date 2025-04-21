@@ -10,6 +10,7 @@ sys.path.append(project_root)
 
 import gymnasium as gym
 import numpy as np
+import casadi as ca
 
 # Import swing-up environments to register them
 import src.environments.swing_up_envs
@@ -126,7 +127,7 @@ def run_mpc_with_diagnostics(num_episodes=1, max_steps=1000, render_mode="rgb_ar
     collecting diagnostic data at each step and plotting afterwards.
     """
     # Create the environment with video-friendly render mode
-    env = gym.make("Pendulum-SwingUp", render_mode=render_mode)
+    env = gym.make("InvertedPendulum-v5", render_mode=render_mode)
     
     # Initialize the viewer by rendering once
     env.reset()
@@ -141,10 +142,14 @@ def run_mpc_with_diagnostics(num_episodes=1, max_steps=1000, render_mode="rgb_ar
         env.unwrapped.viewer.cam.lookat = [0.0, 0.0, 0.0]  # Center the view
     
     controller = MPCController(
-        N=100,  # Increased prediction horizon
-        dt=0.01,  # Increased timestep for better prediction
-        param_path="../src/environments/inverted_pendulum_params.json"
+        N=50,  # INCREASED: Predict 1 second ahead (50 * 0.02s)
+        dt=0.02,  # CORRECTED: Match environment timestep from XML
+        # Use path relative to project root where script is run from
+        param_path="src/environments/inverted_pendulum_params.json" 
     )
+    # Modify the controller's R matrix directly after initialization
+    # controller.R = ca.DM([10.0]) # R is now set via default in controller
+    print(f"MPC Initialized with N={controller.N}, dt={controller.dt}, R={controller.R}")
 
     for episode in range(num_episodes):
         obs, info = env.reset(seed=episode)
@@ -162,10 +167,11 @@ def run_mpc_with_diagnostics(num_episodes=1, max_steps=1000, render_mode="rgb_ar
             u_next = solver_outputs["u_next"]     # float
 
             # Print MPC diagnostics
-            print(f"\nStep {step}:")
-            print(f"Cost: {solver_outputs['cost']:.2f}")
-            print(f"Constraint violation: {solver_outputs['constraint_violation']:.2e}")
-            print(f"Max control in horizon: {np.max(np.abs(U_sol)):.2f}")
+            print(f"Step {step}: Obs={np.array2string(obs, precision=2, floatmode='fixed')}", end='')
+            # Cost and violation are now printed inside solve()
+            # print(f"Cost: {solver_outputs['cost']:.2f}")
+            # print(f"Constraint violation: {solver_outputs['constraint_violation']:.2e}")
+            # print(f"Max control in horizon: {np.max(np.abs(U_sol)):.2f}")
 
             # 2) Step environment
             #   Gym expects the action as e.g. [u_next], ensuring shape (1,)

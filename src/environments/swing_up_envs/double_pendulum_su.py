@@ -199,23 +199,48 @@ class DoublePendulumSwingUp(gym.Wrapper):
 
 
 # Create the factory function
-def make_env(render_mode=None, debug=False):
-    # Creates the base InvertedDoublePendulum environment
-    base_env = gym.make('InvertedDoublePendulum-v5', render_mode=render_mode)
+def make_env(render_mode=None, debug=False, camera_config=None):
+    """
+    Factory function to create the DoublePendulumSwingUp environment.
+    
+    Args:
+        render_mode (str, optional): The render mode for the base environment.
+        debug (bool, optional): Enable debug printing in the wrapper.
+        camera_config (dict, optional): Configuration for the MuJoCo camera.
+
+    Returns:
+        DoublePendulumSwingUp: The wrapped environment instance.
+    """
+    # Creates the base InvertedDoublePendulum environment, passing camera_config
+    env_kwargs = {'render_mode': render_mode}
+    if render_mode is not None and camera_config is not None:
+        # Use the correct argument name for the base MuJoCo env
+        env_kwargs['default_camera_config'] = camera_config
+        
+    base_env = gym.make('InvertedDoublePendulum-v5', **env_kwargs)
     # Wraps it with our swing-up modifications
     return DoublePendulumSwingUp(base_env, debug=debug)
 
-# Register the environment
-register(
-    id='DoublePendulum-SwingUp', # New ID for the double pendulum swing-up
-    entry_point=make_env,       # Points to our factory function
-    max_episode_steps=500,     # Truncation length (adjust if needed, 500 is short for double pendulum)
-)
+# Function to perform registration
+def register_double_pendulum_swing_up():
+    """Registers the DoublePendulum-SwingUp-v0 environment."""
+    if 'DoublePendulumSwingUp-v0' not in gym.envs.registry:
+        register(
+            id='DoublePendulumSwingUp-v0', # Corrected ID with version
+            entry_point='src.environments.swing_up_envs.double_pendulum_su:make_env', # Use full path
+            max_episode_steps=500,     # Truncation length (adjust if needed, 500 is short for double pendulum)
+        )
+        # print("Registered DoublePendulumSwingUp-v0") # Optional debug
+    # else: print("DoublePendulumSwingUp-v0 already registered") # Optional debug
 
+# Initial registration when module is imported (for non-subprocess use)
+# register_double_pendulum_swing_up()
+# We comment this out, registration will be handled by explicit calls
 
 def main(perturb=False, debug=False):
     """
     Test the DoublePendulumSwingUp environment.
+    Requires manual registration if not called via training script.
     
     Args:
         perturb (bool): If True, apply forces to the cart to see dynamics.
@@ -301,6 +326,10 @@ def main(perturb=False, debug=False):
 
 
 if __name__ == "__main__":
+    # Manually register if running this file directly for testing
+    import gymnasium as gym
+    from gymnasium.envs.registration import register
+    register_double_pendulum_swing_up()
     # Set perturb=True to observe dynamics with applied forces
     # Set debug=True for detailed state info
     main(perturb=True, debug=False) 

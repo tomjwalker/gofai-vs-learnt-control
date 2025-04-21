@@ -6,10 +6,13 @@ This script interrogates the MuJoCo InvertedPendulum-v4 environment to:
 1. Inspect and print out all bodies, joints, and actuators.
 2. Extract key parameters (cart mass, pole mass, pole length, inertia, etc.) 
    that we need for a 2D cart-pole dynamics or MPC model.
+
+NOTE: This is an analysis/diagnostic script and not part of the core library.
 """
 
 # Create the environment (with a human render for visual debug)
-env = gym.make("InvertedPendulum-v4", render_mode="human")
+# Use v5 for consistency with parameter extraction
+env = gym.make("InvertedPendulum-v5", render_mode="human") 
 env.reset()
 
 # Access the MuJoCo model directly
@@ -68,7 +71,8 @@ for i in range(model.ngeom):
     geom_type_id = model.geom_type[i]
     geom_type = geom_type_dict.get(geom_type_id, f"unknown ({geom_type_id})")
     size = model.geom_size[i]
-    print(f"Geom {i}: '{name}' — type = {geom_type}, size = {size}")
+    friction = model.geom_friction[i] # Extract friction
+    print(f"Geom {i}: '{name}' — type = {geom_type}, size = {size}, friction = {friction}")
 
     # If it's the pole geometry, we can read the 'half-length' from size[1].
     if name == "cpole":
@@ -86,24 +90,29 @@ for i in range(model.njnt):
     jtype = model.jnt_type[i]
     axis = model.jnt_axis[i]
     jpos = model.jnt_pos[i]
+    damping = model.dof_damping[model.jnt_dofadr[i]] # Extract damping
     print(f"Joint {i}: '{name}'")
     print(f"    type = {jtype} "
           f"(2=slide, 3=hinge, etc.)")
     print(f"    axis = {axis}  (the direction the joint moves/rotates about)")
-    print(f"    pos  = {jpos}\n")
+    print(f"    pos  = {jpos}")
+    print(f"    damping = {damping}") # Print damping
 
 # -----------------------------------------------------------------------------------
 #   4. Actuator Info (Mapping Control Action -> Force/Torque)
 # -----------------------------------------------------------------------------------
 print("== Actuators ==")
 for i in range(model.nu):
+    name = model.actuator(i).name
     # gain and bias define how your action u is converted to a force or torque
     gain = model.actuator_gainprm[i]
     bias = model.actuator_biasprm[i]
-    print(f"Actuator {i}: ")
+    gear = model.actuator_gear[i] # Extract gear
+    print(f"Actuator {i}: '{name}'")
     print(f"    gain parameters = {gain}")
     print(f"    bias parameters = {bias}")
-    print("    (Force = gain[0] * u + bias[0], if other entries are zero.)\n")
+    print(f"    gear = {gear}") # Print gear
+    print("    (Force = gear * (gain[0] * u + bias[0]), if gain/bias used.)\n")
 
 print("====================================================\n")
 
@@ -130,4 +139,4 @@ else:
 print("\n(For a simpler cart-pole approximation, you'd often treat the pole as a uniform rod with I = 1/3 m l^2.)\n")
 
 # Done: close environment
-env.close()
+env.close() 

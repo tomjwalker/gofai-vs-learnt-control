@@ -259,30 +259,39 @@ def make_env(render_mode=None, debug=False, camera_config=None,
         env_kwargs['default_camera_config'] = camera_config 
         
     base_env = gym.make('InvertedPendulum-v5', **env_kwargs)
-    # Wraps it with our swing-up modifications, passing reward params
+    # Wraps it with our swing-up modifications
     return PendulumSwingUp(base_env, debug=debug, 
                          reward_mode=reward_mode, 
                          center_penalty_weight=center_penalty_weight, 
                          limit_penalty=limit_penalty)
 
-# Register the environment
-register(
-    id='Pendulum-SwingUp', # Renamed ID
-    entry_point=make_env, # Points to our factory function
-    max_episode_steps=500, # Standard truncation length
-    kwargs={ # Default arguments for the factory function
-        'reward_mode': 'cos_theta',
-        'center_penalty_weight': 0.1,
-        'limit_penalty': 10.0,
-        'debug': False,
-        'camera_config': None
-    } 
-)
+# Function to perform registration
+def register_pendulum_swing_up():
+    """Registers the Pendulum-SwingUp environment."""
+    if 'Pendulum-SwingUp' not in gym.envs.registry:
+        register(
+            id='Pendulum-SwingUp', # Renamed ID
+            entry_point='src.environments.swing_up_envs.pendulum_su:make_env', # Use full path
+            max_episode_steps=500, # Standard truncation length
+            kwargs={ # Default arguments for the factory function
+                'reward_mode': 'cos_theta',
+                'center_penalty_weight': 0.1,
+                'limit_penalty': 10.0,
+                'debug': False,
+                'camera_config': None
+            } 
+        )
+        # print("Registered Pendulum-SwingUp") # Optional debug
+    # else: print("Pendulum-SwingUp already registered") # Optional debug
 
+# Initial registration when module is imported (for non-subprocess use)
+# register_pendulum_swing_up()
+# We comment this out, registration will be handled by explicit calls
 
 def main(perturb=False, debug=False):
     """
     Test the PendulumSwingUp environment.
+    Requires manual registration if not called via training script.
     
     Args:
         perturb (bool): If True, apply forces to the cart to see dynamics.
@@ -370,6 +379,10 @@ def main(perturb=False, debug=False):
 
 
 if __name__ == "__main__":
+    # Manually register if running this file directly for testing
+    import gymnasium as gym
+    from gymnasium.envs.registration import register
+    register_pendulum_swing_up()
     # Set perturb=True to observe the pendulum dynamics with applied forces
     # Set debug=True to see detailed state information during reset and steps
     main(perturb=True, debug=False) 

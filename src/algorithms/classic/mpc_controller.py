@@ -13,8 +13,58 @@ from src.environments.casadi_dynamics import pendulum_dynamics
 # TODO: remove hardcoded path
 # Set working directory to the root of the project, without any relative path logic
 import os
-os.chdir(os.path.join(os.path.dirname(__file__), "../.."))
-print(os.getcwd())
+# os.chdir(os.path.join(os.path.dirname(__file__), "../..")) # Commented out, paths should be relative to project root
+# print(os.getcwd())
+
+def build_mpc_bounds(state_bounds_obs: list, control_bounds: list, N: int, 
+                       joint_bounds: dict = None) -> Tuple[list, list]:
+    """
+    Construct lists of lower and upper bounds for the stacked state (X) 
+    and control (U) trajectory variables used in the NLP.
+
+    Uses physical joint bounds where available, otherwise observation bounds.
+
+    Args:
+        state_bounds_obs: Bounds from the environment's observation space [[min, max], ...].
+        control_bounds: Bounds for the control inputs [[min, max], ...].
+        N: MPC prediction horizon.
+        joint_bounds: Dictionary of physical joint limits {state_name: [min, max]}.
+
+    Returns:
+        Tuple[list, list]: lbx, ubx lists for the NLP solver.
+    """
+    lbx, ubx = [], []
+    joint_bounds = joint_bounds or {}
+    
+    # State bounds (X trajectory, shape 4 x N+1)
+    num_states = len(state_bounds_obs)
+    state_names = ['cart_pos', 'pole_angle', 'cart_vel', 'pole_ang_vel'] # Assuming this order
+    
+    for k in range(N + 1):  # Iterate over timesteps
+        for i in range(num_states):  # Iterate over states (x, theta, x_dot, theta_dot)
+            state_name = state_names[i]
+            # Use specific joint bound if available, otherwise use observation space bound
+            if state_name in joint_bounds:
+                lb, ub = joint_bounds[state_name]
+            else:
+                lb, ub = state_bounds_obs[i]
+                
+            # Use -inf/inf from numpy if needed, converting json's "Infinity" string
+            lb = -np.inf if lb == -float('inf') else lb
+            ub = np.inf if ub == float('inf') else ub
+            
+            lbx.append(lb)
+            ubx.append(ub)
+            
+    # Control bounds (U trajectory, shape 1 x N)
+    num_controls = len(control_bounds)
+    for _ in range(N): # Iterate over timesteps
+        for i in range(num_controls):
+            lb, ub = control_bounds[i]
+            lbx.append(lb)
+            ubx.append(ub)
+
+    return lbx, ubx
 
 
 def build_mpc_solver(
@@ -100,10 +150,13 @@ def build_mpc_solver(
     dynamics_constraints = ca.vertcat(initial_state_constraint, *dynamics_constraints)
 
     # === Build bounds on state and control vectors ===
-
-    state_bounds = params["state_bounds"]
-    control_bounds = params["control_bounds"]
-    lbx, ubx = build_mpc_bounds(state_bounds, control_bounds, N)
+    # Use the updated build_mpc_bounds which prioritizes physical joint limits
+    lbx, ubx = build_mpc_bounds(
+        params["state_bounds_obs"], # Pass obs bounds
+        params["control_bounds"], 
+        N, 
+        params.get("joint_bounds") # Pass physical joint bounds if they exist
+    )
 
     # === Compile the NLP problem ===
 
@@ -124,7 +177,7 @@ def build_mpc_solver(
 
     # Solver options
     opts = {
-        "ipopt.print_level": 5,  # Increased to see more detailed output
+        "ipopt.print_level": 0,  # Reduced verbosity
         "ipopt.tol": 1e-6,  # Tighter tolerance
         "ipopt.max_iter": 200,  # More iterations allowed
         "ipopt.linear_solver": "mumps",  # Use MUMPS which comes with CasADi
@@ -134,7 +187,7 @@ def build_mpc_solver(
         "ipopt.mu_strategy": "adaptive",  # Better convergence
         "ipopt.ma57_automatic_scaling": "yes",  # Better numerical stability
         "ipopt.sb": "yes",  # Suppress banner
-        "ipopt.max_cpu_time": 1.0  # Limit solve time to 1 second
+        # "ipopt.max_cpu_time": 1.0  # Remove or increase time limit for now
     }
 
     # Create an IPOPT solver instance
@@ -155,9 +208,9 @@ class MPCController:
     """
 
     def __init__(self,
-                 N: int = 10,
-                 dt: float = 0.05,
-                 param_path: str = "environments/inverted_pendulum_params.json"):
+                 N: int = 30,
+                 dt: float = 0.02,
+                 param_path: str = "src/environments/inverted_pendulum_params.json"):
         """
         Initialise MPC with problem horizon, timestep, and physical parameters.
         - Loads environment parameters
@@ -174,15 +227,18 @@ class MPCController:
         self.N = N
         self.dt = dt
 
-        # Define cost matrices with higher weights on angle and terminal cost
-        self.Q = ca.diag([1.0, 50.0, 10.0, 50.0])  # [x, theta, x_dot, theta_dot] - increased velocity weights
-        self.R = ca.DM([1.0])  # Increased control weight to discourage saturation
-        self.Q_terminal = 5.0 * self.Q  # Reduced terminal cost multiplier
+        # Define cost matrices
+        # Reduced state weights, increased velocity weights slightly
+        self.Q = ca.diag([1.0, 20.0, 5.0, 10.0])  
+        # Significantly increased control weight
+        self.R = ca.DM([50.0]) 
+        # Keep terminal cost proportional to Q
+        self.Q_terminal = 5.0 * self.Q  
 
         # Define reference state (upright position)
         self.X_ref = ca.DM.zeros(4, 1)
 
-        # Build solver with tighter tolerances
+        # Build solver
         self.solver, self.X, self.U, self.X_init, self.lbx, self.ubx = build_mpc_solver(
             self.params, self.N, self.dt, self.Q, self.R, self.Q_terminal, self.X_ref
         )
@@ -271,39 +327,41 @@ class MPCController:
 
         # === Construct initial guess ===
         X_guess, U_guess = self.get_guesses(x0)
-
-        # As seen in the helper function `build_mpc_solver`, the X matrix (shape (:, N+1)) and U matrix (1, N) are
-        # each flattened into a column vector and then concatenated X over U. In the helper function we defined this
-        # for the symbolic CasADi placeholders, now we do it for the real-valued X_guess and U_guess
         initial_x_vec = X_guess.T.flatten()
         initial_u_vec = U_guess.T.flatten()
         initial_vec = np.concatenate([initial_x_vec, initial_u_vec])
 
         # === Call CasADi solver ===
-        solution = self.solver(
-            x0=initial_vec,    # solver argument x0 is a vector of all flattened X and U arrays (features x forcast ts)
-            lbx=self.lbx,
-            ubx=self.ubx,
-            lbg=0,    # All dynamics constraints are written as equality constraints LHS - RHS = 0
-            ubg=0,
-            p=x0.ravel()    # the additional required param for f(x, p) and g(x, p) is the current timestep X_init
-        )
-        # N.B. x0 should be a 1d vector already, but .ravel() ensures consistency.
-        # E.g. a vector of (4,), a vector of (4, 1) and a vector of (1, 4) will all have the same (4, ) shape after
-        # ravel
+        try:
+            solution = self.solver(
+                x0=initial_vec, 
+                lbx=self.lbx,
+                ubx=self.ubx,
+                lbg=0, 
+                ubg=0,
+                p=x0.ravel() 
+            )
+            
+            # Simplified diagnostics after successful solve
+            cost = float(solution["f"]) if "f" in solution else np.nan
+            constraint_violation = float(np.max(np.abs(solution['g']))) if "g" in solution else np.nan
+            print(f"  MPC Solve: Cost={cost:.2f}, ConstrViol={constraint_violation:.2e}", end='') # Print on one line
 
-        # Print solver diagnostics if available
-        if "f" in solution:
-            print(f"Cost: {solution['f']}")
-        if "g" in solution:
-            constraint_violation = np.max(np.abs(solution['g']))
-            print(f"Max constraint violation: {constraint_violation}")
+        except Exception as e:
+            print(f"\nMPC Solver failed: {e}")
+            # Return a default safe action (e.g., zero) or re-raise
+            # For now, return a dictionary indicating failure
+            return {
+                "X_solution": None, # Indicate failure
+                "U_solution": None,
+                "u_next": 0.0, # Default safe action
+                "cost": np.inf,
+                "constraint_violation": np.inf,
+                "solver_status": "failed"
+            }
 
         # === Extract U from solver output ===
         optimal_vars = solution["x"].full().flatten()
-
-        # - The solver returns the optimal output in the same stacked column vector form as the input
-        # - Therefore, the first (len(X) * (N+1) elements are the solution for X, the remainder (1 * N) for U
         len_x = len(x0)
         width_x = self.N + 1
         width_u = self.N
@@ -314,19 +372,17 @@ class MPCController:
         # Separate out the immediate timestep's control signal, for convenience
         u_next = float(U_solution[0, 0])
 
-        # Print some diagnostics about the solution
-        print(f"Initial state: {x0}")
-        print(f"First control: {u_next}")
-        print(f"Final predicted state: {X_solution[:, -1]}")
-        print(f"Max control in horizon: {np.max(np.abs(U_solution))}")
+        # Print concise diagnostics about the solution
+        print(f", u_next={u_next:.3f}, Max|U|={np.max(np.abs(U_solution)):.2f}") 
 
         # Collate all useful outputs into a dict
         solver_outputs = {
             "X_solution": X_solution,
             "U_solution": U_solution,
             "u_next": u_next,
-            "cost": float(solution["f"]) if "f" in solution else None,
-            "constraint_violation": float(np.max(np.abs(solution["g"]))) if "g" in solution else None
+            "cost": cost,
+            "constraint_violation": constraint_violation,
+            "solver_status": self.solver.stats().get('return_status', 'unknown')
         }
 
         # === Update self.X_prev and self.U_prev attributes ===
@@ -337,8 +393,7 @@ class MPCController:
 
     def step(self, x0: np.ndarray) -> float:
         """
-        Return the first control input from the MPC solution. This method also included to have a common API to
-        DRL-type controllers / fitting the general Gymnasium/MDP approach
+        Return the first control input from the MPC solution. Handles solver failures.
 
         Args:
             x0 (np.ndarray): Current state, shape (4,)
@@ -347,5 +402,12 @@ class MPCController:
             float: First control input u₀
         """
         solver_outputs = self.solve(x0)
-
+        # Check if solve failed and return safe action if necessary
+        if solver_outputs.get("solver_status") == "failed" or solver_outputs.get("X_solution") is None:
+            print("Warning: MPC step using default safe action due to solver failure.")
+            # Reset previous solution to avoid bad warm-start
+            self.X_prev = None
+            self.U_prev = None
+            return 0.0 # Return zero action
+        
         return solver_outputs["u_next"]
