@@ -53,4 +53,80 @@ class DiscretizeActionWrapper(gym.ActionWrapper):
         
         # Ensure the action is within the original bounds (due to potential float precision)
         # And return as a numpy array matching original space dtype and shape
-        return np.clip(continuous_action, self.low, self.high).astype(self.original_action_space.dtype) 
+        return np.clip(continuous_action, self.low, self.high).astype(self.original_action_space.dtype)
+
+class InvertedPendulumComparisonWrapper(gym.Wrapper):
+    """
+    A wrapper for the InvertedPendulum environment specifically for 
+    long-term simulation comparison against an analytical model.
+    
+    Features:
+    - Disables the default 'terminated' condition (pole falling too far).
+    - Allows setting a specific initial state via `reset(initial_state=...)`.
+    - *Attempts* to remove the angle limits on the hinge joint for comparison.
+    """
+    def __init__(self, env):
+        super().__init__(env)
+        print("Initialized InvertedPendulumComparisonWrapper.")
+        
+        # Attempt to remove hinge joint limits
+        try:
+            model = self.env.unwrapped.model
+            hinge_index = -1
+            for i in range(model.njnt):
+                if model.joint(i).name == 'hinge':
+                    hinge_index = i
+                    break
+            
+            if hinge_index != -1:
+                # Set limited flag to False (0)
+                model.jnt_limited[hinge_index] = 0 
+                # Optionally update range visually (though jnt_limited is key)
+                model.jnt_range[hinge_index] = [-1e10, 1e10] 
+                print(f"Wrapper: Successfully removed limits for joint '{model.joint(hinge_index).name}' (index {hinge_index})")
+            else:
+                print("Warning: Wrapper could not find 'hinge' joint to remove limits.")
+        except Exception as e:
+            print(f"Warning: Wrapper encountered exception trying to remove joint limits: {e}")
+
+    def reset(self, *, seed=None, options=None, initial_state=None):
+        """
+        Resets the environment.
+        If initial_state is provided (as [x, theta, x_dot, theta_dot]),
+        it attempts to set the MuJoCo state accordingly.
+        """
+        # Call the parent reset first to ensure proper setup
+        observation, info = super().reset(seed=seed, options=options)
+        
+        if initial_state is not None:
+            initial_state = np.array(initial_state, dtype=np.float64)
+            if len(initial_state) == 4:
+                qpos = initial_state[:2] # [x, theta]
+                qvel = initial_state[2:] # [x_dot, theta_dot]
+                try:
+                    # Access the underlying MuJoCo environment to set state
+                    self.env.unwrapped.set_state(qpos, qvel)
+                    # Re-get the observation *from the environment* after setting the state
+                    observation = self.env.unwrapped._get_obs()
+                    print(f"Successfully set initial state via wrapper: qpos={qpos}, qvel={qvel}")
+                    print(f" -> Resulting observation: {observation}")
+                except Exception as e:
+                    print(f"Warning: Wrapper failed to set initial state: {e}. Using default reset state.")
+                    # observation, info already contain the default reset results
+            else:
+                print("Warning: initial_state provided to wrapper has incorrect length. Using default reset state.")
+                # observation, info already contain the default reset results
+
+        return observation, info
+
+    def step(self, action):
+        """
+        Steps the environment but forces the 'terminated' flag to False.
+        Truncation based on time limit still applies.
+        """
+        observation, reward, terminated, truncated, info = self.env.step(action)
+        
+        # Override termination signal for long simulation comparison
+        terminated = False 
+        
+        return observation, reward, terminated, truncated, info 

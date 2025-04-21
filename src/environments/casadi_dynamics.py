@@ -132,64 +132,84 @@ if __name__ == "__main__":
     import matplotlib.animation as animation
     from src.utils.parameters import load_inverted_pendulum_params
     import os
+    import gymnasium as gym # Import gym
+    from src.environments.wrappers import InvertedPendulumComparisonWrapper # Import the wrapper
 
-    print("Running CasADi dynamics simulation and visualization...")
+    print("Running CasADi and Gym dynamics simulation and comparison...")
 
     # --- Configuration ---
+    ENV_ID = "InvertedPendulum-v5"
     PARAM_PATH = "src/environments/inverted_pendulum_params.json"
-    DT = 0.02  # Simulation timestep
-    SIM_STEPS = 5000  # Number of simulation steps (e.g., 100 seconds) - INCREASED x10
-    INITIAL_STATE = np.array([0.0, 0.1, 0.0, 0.0]) # Start near upright
-    CONTROL_INPUT = np.array([0.0]) # Zero control
+    DT = 0.02  # Simulation timestep (Should match env.dt)
+    SIM_STEPS = 5000  # Number of simulation steps (e.g., 100 seconds)
+    # Define separate initial state for CasADi to ensure perturbation
+    CASADI_INITIAL_STATE = np.array([0.0, 0.1, 0.0, 0.0]) 
+    CONTROL_INPUT = np.array([0.0]) # Zero control for comparison
     INTEGRATION_METHOD = 'rk4'
 
-    # --- Load Parameters ---
+    # --- Load Parameters for CasADi ---
     if not os.path.exists(PARAM_PATH):
         print(f"Error: Parameter file not found at {PARAM_PATH}")
         exit()
     params = load_inverted_pendulum_params(PARAM_PATH)
     pole_vis_length = params.get('pole_length', 0.6) # Use full length for vis
 
+    # --- Simulate Gymnasium Environment ---
+    print(f"Simulating Gym environment '{ENV_ID}' for {SIM_STEPS} steps using wrapper...")
+    # Use the wrapper
+    env = InvertedPendulumComparisonWrapper(gym.make(ENV_ID))
+    # Reset using the wrapper's method to set the initial state
+    obs_gym, info_gym = env.reset(initial_state=CASADI_INITIAL_STATE)
+    print(f"Gym reset state: {obs_gym}") # Should now reflect the set state
+
+    # Gym state needs careful handling: obs is [x, sin, cos, xdot, tdot]
+    # We need [x, theta, xdot, tdot] for comparison plots if needed later,
+    # but for storing raw simulation data, store the observation directly.
+    gym_states = np.zeros((SIM_STEPS + 1, len(obs_gym))) # Store raw observations
+    gym_states[0, :] = obs_gym
+    for i in range(SIM_STEPS):
+        action_gym = [CONTROL_INPUT[0]] 
+        obs_gym, reward_gym, terminated_gym, truncated_gym, info_gym = env.step(action_gym)
+        gym_states[i + 1, :] = obs_gym
+        # Note: terminated_gym should always be False due to wrapper
+        if truncated_gym: 
+            print(f"Gym simulation truncated at step {i+1}.")
+            SIM_STEPS = i 
+            gym_states = gym_states[:SIM_STEPS+1, :]
+            break
+    env.close()
+    print("Gym simulation complete.")
+
     # --- Setup CasADi Function ---
     x_sym = ca.SX.sym('x', 4)
     u_sym = ca.SX.sym('u', 1)
     x_next_sym = pendulum_dynamics(x_sym, u_sym, DT, params, integration_method=INTEGRATION_METHOD)
-    
-    # Create a CasADi function for numerical evaluation
-    # Note: Need to use ca.Function which supports numerical inputs/outputs
     dynamics_func = ca.Function('dynamics', [x_sym, u_sym], [x_next_sym])
 
-    # --- Simulate Dynamics ---
-    print(f"Simulating {SIM_STEPS} steps with dt={DT} using {INTEGRATION_METHOD}...")
-    states = np.zeros((SIM_STEPS + 1, 4))
-    states[0, :] = INITIAL_STATE
-    
-    current_x = INITIAL_STATE
-    for i in range(SIM_STEPS):
-        # Convert numpy arrays to CasADi DM type for the function call
-        x_next_dm = dynamics_func(ca.DM(current_x), ca.DM(CONTROL_INPUT))
-        # Convert result back to numpy array
-        current_x = x_next_dm.full().flatten()
-        states[i + 1, :] = current_x
-        if np.any(np.isnan(current_x)):
-             print(f"Simulation stopped at step {i+1} due to NaN state.")
-             SIM_STEPS = i # Truncate simulation
-             states = states[:SIM_STEPS+1, :]
-             break
-             
-    print("Simulation complete.")
+    # --- Simulate CasADi Dynamics ---
+    print(f"Simulating CasADi model for {SIM_STEPS} steps...")
+    casadi_states = np.zeros((SIM_STEPS + 1, 4)) 
+    casadi_states[0, :] = CASADI_INITIAL_STATE 
+    current_x_casadi = CASADI_INITIAL_STATE
+    for i in range(SIM_STEPS): # Use potentially updated SIM_STEPS
+        x_next_dm = dynamics_func(ca.DM(current_x_casadi), ca.DM(CONTROL_INPUT))
+        current_x_casadi = x_next_dm.full().flatten()
+        casadi_states[i + 1, :] = current_x_casadi
+        if np.any(np.isnan(current_x_casadi)):
+             print(f"CasADi simulation stopped at step {i+1} due to NaN state.")
+             SIM_STEPS = i 
+             casadi_states = casadi_states[:SIM_STEPS+1, :]
+             gym_states = gym_states[:SIM_STEPS+1, :] 
+             break      
+    print("CasADi simulation complete.")
 
-    # --- Calculate Max Initial Swing Angle/Height ---
-    # Find first peak angle (approx first quarter period)
-    # Estimate period T approx 2*pi*sqrt(L/g) -> T/4
-    # This is very approximate, maybe just search first ~100 steps
-    first_swing_steps = min(SIM_STEPS // 2, 150) # Look within first ~3 seconds
-    max_theta_first_swing = np.max(np.abs(states[:first_swing_steps, 1]))
-    max_height_first_swing = pole_vis_length * np.cos(max_theta_first_swing) # y=L*cos(theta)
-    print(f"Max angle in first ~{first_swing_steps*DT:.2f}s: {np.rad2deg(max_theta_first_swing):.2f} deg")
-    print(f"Corresponding max height: {max_height_first_swing:.3f} m")
+    # --- Calculate Max Initial Swing Angle/Height (from CasADi sim) ---
+    first_swing_steps = min(SIM_STEPS // 2, 150) 
+    max_theta_first_swing = np.max(np.abs(casadi_states[:first_swing_steps, 1]))
+    max_height_first_swing = pole_vis_length * np.cos(max_theta_first_swing) 
+    print(f"Max CasADi angle in first ~{first_swing_steps*DT:.2f}s: {np.rad2deg(max_theta_first_swing):.2f} deg")
 
-    # --- Setup Animation ---
+    # --- Setup Animation (Shows CasADi simulation only) ---
     fig, ax = plt.subplots()
     ax.set_aspect('equal')
     ax.set_xlabel("Cart Position (m)")
@@ -197,9 +217,9 @@ if __name__ == "__main__":
     ax.set_title(f"CasADi ({INTEGRATION_METHOD}) Inverted Pendulum Simulation (No Control)")
 
     # Determine plot limits dynamically
-    max_cart_pos = np.max(np.abs(states[:, 0]))
-    ax.set_xlim(states[0, 0] - max_cart_pos - pole_vis_length * 1.2, 
-                states[0, 0] + max_cart_pos + pole_vis_length * 1.2)
+    max_cart_pos = np.max(np.abs(casadi_states[:, 0]))
+    ax.set_xlim(casadi_states[0, 0] - max_cart_pos - pole_vis_length * 1.2, 
+                casadi_states[0, 0] + max_cart_pos + pole_vis_length * 1.2)
     ax.set_ylim(-pole_vis_length * 1.2, pole_vis_length * 1.2)
 
     # Add horizontal lines for max initial height
@@ -218,7 +238,7 @@ if __name__ == "__main__":
 
     # --- Animation Update Function ---
     def update(frame):
-        x, theta = states[frame, 0], states[frame, 1]
+        x, theta = casadi_states[frame, 0], casadi_states[frame, 1]
         
         # Cart position
         cart_x = x - cart_width / 2
@@ -244,24 +264,31 @@ if __name__ == "__main__":
 
     print("Visualization closed.")
 
-    # --- Generate Static State Plots ---
-    print("Generating state plots...")
+    # --- Generate Static State Plots (Comparison) ---
+    print("Generating comparison state plots...")
     time_vector = np.arange(SIM_STEPS + 1) * DT
     fig_states, axs = plt.subplots(4, 1, sharex=True, figsize=(10, 8))
-    fig_states.suptitle('State Variables vs Time (CasADi Simulation)')
+    fig_states.suptitle('State Variables vs Time: CasADi Model vs Gym Simulation')
 
     state_labels = ['Cart Position (x) [m]', 'Pole Angle (theta) [rad]', 
                     'Cart Velocity (x_dot) [m/s]', 'Pole Angular Vel (theta_dot) [rad/s]']
-    state_indices = [0, 1, 2, 3]
+    casadi_indices = [0, 1, 2, 3]
+    # Gym state is now directly comparable: [x, theta, x_dot, theta_dot]
+    # REMOVED reconstruction logic
+    # gym_theta = np.arctan2(gym_states[:, 1], gym_states[:, 2]) 
+    # gym_plot_states = np.vstack([gym_states[:, 0], ... ]).T
 
     for i, ax_i in enumerate(axs):
-        idx = state_indices[i]
-        ax_i.plot(time_vector, states[:, idx])
+        idx = casadi_indices[i]
+        ax_i.plot(time_vector, casadi_states[:, idx], label='CasADi Model')
+        # Directly plot the corresponding column from gym_states
+        ax_i.plot(time_vector, gym_states[:, idx], linestyle='--', label='Gym Sim') 
         ax_i.set_ylabel(state_labels[i])
         ax_i.grid(True)
+        ax_i.legend()
 
     axs[-1].set_xlabel("Time (s)")
-    plt.tight_layout(rect=[0, 0, 1, 0.96]) # Adjust layout for suptitle
+    plt.tight_layout(rect=[0, 0, 1, 0.96]) 
     plt.show()
 
     print("State plots closed.")
