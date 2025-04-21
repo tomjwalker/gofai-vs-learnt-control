@@ -216,9 +216,8 @@ def train_session(config, seed, run_dir):
     env = vec_env_cls(env_fns)
 
     # --- Agent Setup ---
-    tensorboard_log_path = run_dir / "logs"
-    model_save_path = run_dir / "models" / f"{config.agent.lower()}_{config.env_id}_seed{seed}.zip"
-    model_save_path.parent.mkdir(parents=True, exist_ok=True)
+    tensorboard_log_path = config.tensorboard_log_path
+    model_save_path = config.model_save_path
     
     # Handle policy_kwargs string -> dict
     policy_kwargs_dict = None
@@ -244,7 +243,7 @@ def train_session(config, seed, run_dir):
                     vf_coef=config.vf_coef,
                     max_grad_norm=config.max_grad_norm,
                     policy_kwargs=policy_kwargs_dict, 
-                    tensorboard_log=str(tensorboard_log_path), 
+                    tensorboard_log=tensorboard_log_path, 
                     seed=seed, 
                     verbose=1 # 0 = no output, 1 = training info, 2 = debug
                    )
@@ -254,9 +253,10 @@ def train_session(config, seed, run_dir):
     # --- Training --- 
     print(f"Starting training for {config.total_timesteps} timesteps...")
     print(f"TensorBoard logs will be saved to: {tensorboard_log_path}")
-    print("Run `tensorboard --logdir runs` to view logs.")
+    print("Run `tensorboard --logdir runs/DRL` to view logs.")
     
-    summary_callback = SummaryWriterCallback(run_dir, run_dir / "config.json")
+    config_file_path = run_dir / "config.json"
+    summary_callback = SummaryWriterCallback(run_dir, config_file_path)
     
     try:
         model.learn(total_timesteps=config.total_timesteps, callback=summary_callback, progress_bar=True)
@@ -269,7 +269,7 @@ def train_session(config, seed, run_dir):
     
     # --- Saving Model --- 
     try:
-        model.save(str(model_save_path))
+        model.save(model_save_path)
         print(f"Trained model saved to: {model_save_path}")
     except Exception as e:
         print(f"\nERROR saving model: {e}")
@@ -314,7 +314,7 @@ if __name__ == "__main__":
     
     # --- Run Setup & Config Saving ---
     # Note: Run ID generated inside the loop now for multi-session
-    base_run_dir = Path("runs")
+    base_run_dir = Path("runs") / "DRL"
     all_run_ids = []
 
     for i in range(args.num_sessions):
@@ -326,21 +326,34 @@ if __name__ == "__main__":
         run_id = get_run_id(session_args)
         all_run_ids.append(run_id)
         run_dir = base_run_dir / run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
+        # Create subdirs within the session run_dir
+        models_dir = run_dir / "models"
+        logs_dir = run_dir / "logs" # For Tensorboard
+        videos_dir = run_dir / "videos" # For consistency
+        models_dir.mkdir(parents=True, exist_ok=True)
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        videos_dir.mkdir(parents=True, exist_ok=True)
         
-        # Save configuration for this session
+        # Update paths used by train_session to point to subdirs
+        session_args.tensorboard_log_path = str(logs_dir)
+        session_args.model_save_path = str(models_dir / f"{session_args.agent.lower()}_{session_args.env_id}_seed{session_seed}.zip")
+
+        # Save configuration for this session in the root of run_dir
         config_to_save = vars(session_args).copy()
         config_file = run_dir / "config.json"
+        # Remove paths from config? Optional, but keeps it cleaner
+        config_to_save.pop('tensorboard_log_path', None)
+        config_to_save.pop('model_save_path', None)
         with open(config_file, 'w') as f:
             json.dump(config_to_save, f, indent=2, sort_keys=True)
         print(f"\nSession {i+1}/{args.num_sessions}, Seed: {session_seed}, Run ID: {run_id}")
         print(f"Configuration saved to: {config_file}")
         
         # --- Run Training for One Session ---
-        # Wrap in try-except to catch potential errors in one session
-        # Especially useful with SubprocVecEnv which can have pickling issues on Windows
+        # Pass the specific session args and the root run_dir
         try:
-            train_session(session_args, session_seed, run_dir)
+            # Pass session_args containing updated paths
+            train_session(session_args, session_seed, run_dir) 
         except Exception as e:
             print(f"\nERROR occurred in training session {i+1} (Seed: {session_seed}, Run ID: {run_id}):")
             import traceback
@@ -351,4 +364,4 @@ if __name__ == "__main__":
     print("Run IDs:")
     for rid in all_run_ids:
         print(f"  {rid}")
-    print("\nUse `tensorboard --logdir runs` to view training logs.") 
+    print("\nUse `tensorboard --logdir runs/DRL` to view training logs.") 

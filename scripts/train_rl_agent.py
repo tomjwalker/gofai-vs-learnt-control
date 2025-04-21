@@ -283,19 +283,21 @@ if __name__ == "__main__":
     # Generate a unique run ID for this training run
     run_id = get_run_id(args)
     
-    # Create directories for this run
-    run_dir = Path("runs") / run_id
+    # Create directories for this run under runs/DRL/
+    run_dir = Path("runs") / "DRL" / run_id # ADDED /DRL/
     models_dir = run_dir / "models"
     plots_dir = run_dir / "plots"
+    videos_dir = run_dir / "videos" # Added for consistency if videos are added later
     
     models_dir.mkdir(parents=True, exist_ok=True)
     plots_dir.mkdir(parents=True, exist_ok=True)
+    videos_dir.mkdir(parents=True, exist_ok=True) # Added
     
     # Update save paths to use the run directory
     original_save_path = Path(args.save_path)
     original_plot_path = Path(args.plot_save_path)
     
-    # Use original filenames but in the new run directory
+    # Use original filenames but in the new run directory structure
     args.save_path = str(models_dir / original_save_path.name)
     args.plot_save_path = str(plots_dir / original_plot_path.name)
     
