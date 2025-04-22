@@ -130,3 +130,27 @@ class InvertedPendulumComparisonWrapper(gym.Wrapper):
         terminated = False 
         
         return observation, reward, terminated, truncated, info 
+
+# --- Wrapper for setting initial state for swing-up --- 
+class SwingUpResetWrapper(gym.Wrapper):
+    """Simple wrapper to reset the pendulum environment to the bottom state."""
+    def __init__(self, env):
+        super().__init__(env)
+        self.unwrapped_env = env.unwrapped # Get the unwrapped env
+        self.initial_qpos = np.array([0.0, -np.pi]) # [cart_pos, pole_angle]
+        self.initial_qvel = np.array([0.0, 0.0]) # [cart_vel, pole_ang_vel]
+
+    def reset(self, **kwargs):
+        # Reset the base environment first (might randomize slightly)
+        obs, info = self.env.reset(**kwargs)
+        
+        # Force the specific initial state for swing-up
+        try:
+            self.unwrapped_env.set_state(self.initial_qpos, self.initial_qvel)
+            # Get the observation corresponding to the reset state
+            obs = self.unwrapped_env._get_obs()
+        except Exception as e:
+            print(f"Warning: SwingUpResetWrapper could not set initial state: {e}")
+            # Return the observation from the initial reset call
+            
+        return obs, info 

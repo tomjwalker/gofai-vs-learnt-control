@@ -2,11 +2,18 @@ import gymnasium as gym
 import json
 import numpy as np
 import mujoco
+import argparse
+
+# Import the registration function
+# from src.environments.custom_swingup_env import register_unlimited_swingup_env # Old import
+from src.environments.swing_up_envs.pendulum_su import register_pendulum_swing_up # New import
 
 
 def extract_inverted_pendulum_params(env_id="InvertedPendulum-v5",
                                      render_mode=None,
-                                     output_file="src/environments/inverted_pendulum_params.json"):
+                                     output_file_base="src/environments/inverted_pendulum_params", # Base name
+                                     output_suffix="", # Suffix like _swingup
+                                     unlimit_pole=False): # Flag to modify bounds
     """
     Extracts physical and control-related parameters from a Gymnasium MuJoCo environment
     (e.g., InvertedPendulum-v4), and saves them into a JSON file for later use in MPC or RL pipelines.
@@ -23,11 +30,29 @@ def extract_inverted_pendulum_params(env_id="InvertedPendulum-v5",
         - Action (control) limits
         - State (observation) limits
     3. Saves these as a structured JSON file for use in downstream modules.
+
+    If unlimit_pole is True, modifies pole angle joint bounds before saving.
+    Saves to output_file_base + output_suffix + .json
     """
+    output_file = f"{output_file_base}{output_suffix}.json"
     # -------------------- Load environment --------------------
     env = gym.make(env_id, render_mode=render_mode)
     env.reset()
     model = env.unwrapped.model
+
+    # --- DEBUGGING --- 
+    # Moved outside the conditional block to always run
+    print("--- DEBUG: Inspecting model loaded INITIALLY ---")
+    print(f"Initial env_id used: {env_id}")
+    print(f"Model njnt: {model.njnt}")
+    jnt_names = [model.joint(i).name for i in range(model.njnt)]
+    print(f"Model joint names: {jnt_names}")
+    hinge_idx = jnt_names.index('hinge') if 'hinge' in jnt_names else -1
+    print(f"Hinge index: {hinge_idx}")
+    if hinge_idx != -1:
+            print(f"Model hinge joint range (direct access): {model.jnt_range[hinge_idx]}")
+    print("--- END DEBUG ---")
+    # --- END DEBUGGING ---
 
     # -------------------- Extract body properties --------------------
     cart_mass = None
@@ -86,6 +111,43 @@ def extract_inverted_pendulum_params(env_id="InvertedPendulum-v5",
     else:
         print("Warning: Could not extract joint ranges from model.")
 
+    # --- Optionally Modify Pole Angle Bounds --- 
+    if unlimit_pole:
+        # If unlimiting, ensure the custom env is registered and use it
+        # register_unlimited_swingup_env() # Old function call
+        register_pendulum_swing_up() # Call new function to register BOTH IDs
+        env_id = 'Pendulum-SwingUpUnlimited-v0' # Use the correct unlimited ID
+        print(f"--unlimit-pole specified. Using env_id: {env_id} for extraction.")
+        # Re-create env with the correct ID (if not already done)
+        # Note: This assumes the initial env_id wasn't already the unlimited one
+        env.close() # Close the old env
+        env = gym.make(env_id, render_mode=render_mode)
+        env.reset()
+        model = env.unwrapped.model
+        # --- DEBUGGING --- 
+        # The initial debug block can remain here if useful
+        # ... (keep initial debug block) ...
+        # --- END DEBUGGING ---
+        # Re-extract bounds from the NEW model - NO LONGER NEEDED HERE
+        # joint_bounds = {} # Reset dict
+        # if hasattr(model, 'jnt_range') and hasattr(model, 'jnt_qposadr'):
+        #     ...
+        # else:
+        #     print("Warning: Could not re-extract joint ranges from unlimited model.")
+        
+        # --- Get pre-extracted bounds from the env instance --- 
+        if hasattr(env.unwrapped, 'extracted_joint_bounds'):
+             joint_bounds = env.unwrapped.extracted_joint_bounds
+             print(f"Read pre-extracted joint bounds from env object: {joint_bounds}")
+        else:
+             print("Error: Unlimited env instance missing 'extracted_joint_bounds' attribute.")
+             # Fallback or raise error?
+             joint_bounds = {} # Fallback to empty
+        # ------------------------------------------------------
+
+        # We no longer need to manually modify bounds here, 
+        # as they come directly from the custom XML via the new env_id.
+            
     # --- Extract Actuator Info (Gear Ratio) ---
     actuator_gear = {} # Store as {actuator_name: gear_ratio}
     if hasattr(model, 'actuator_gear') and hasattr(model, 'nu'): # nu is number of actuators
@@ -172,15 +234,22 @@ def extract_inverted_pendulum_params(env_id="InvertedPendulum-v5",
     with open(output_file, "w") as f:
         json.dump(params, f, indent=2)
 
-    print(f"✅ Saved inverted pendulum parameters (including bounds) to: {output_file}")
+    print(f"✅ Saved inverted pendulum parameters to: {output_file}")
 
     env.close()
 
 
 if __name__ == "__main__":
-    # Example usage
+    parser = argparse.ArgumentParser(description="Extract parameters from InvertedPendulum env.")
+    parser.add_argument("--env-id", type=str, default="InvertedPendulum-v5", help="Environment ID")
+    parser.add_argument("--output-file-base", type=str, default="src/environments/inverted_pendulum_params", help="Base path for output JSON")
+    parser.add_argument("--output-suffix", type=str, default="", help="Suffix to add to output filename (e.g., '_swingup')")
+    parser.add_argument("--unlimit-pole", action="store_true", help="Widen pole angle joint limits in output")
+    args = parser.parse_args()
+
     extract_inverted_pendulum_params(
-        env_id="InvertedPendulum-v5",
-        render_mode=None,
-        output_file="src/environments/inverted_pendulum_params.json"
+        env_id=args.env_id,
+        output_file_base=args.output_file_base,
+        output_suffix=args.output_suffix,
+        unlimit_pole=args.unlimit_pole
     )

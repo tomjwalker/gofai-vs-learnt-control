@@ -1,4 +1,51 @@
 #!/usr/bin/env python
+"""
+Runs Model Predictive Control (MPC) experiments on Gymnasium environments, 
+primarily focusing on Inverted Pendulum tasks (stabilization and swing-up).
+
+This script handles environment setup, MPC controller initialization, 
+episode execution, data logging, and generation of diagnostic plots and videos.
+
+It uses sensible default configurations (cost function, initial guess strategy, 
+parameter file) based on the specified environment ID, but these can be 
+overridden via command-line arguments.
+
+Example Usage:
+
+1. Standard Inverted Pendulum Stabilization (defaults handle cost/guess/params):
+   -----------------------------------------------------------------------------
+   python scripts/evaluate_mpc_controller.py \
+       --env-id InvertedPendulum-v5 \
+       --num-episodes 3 \
+       --max-steps 500 \
+       --q-diag 10.0 1.0 0.1 0.1 \
+       --r-val 0.1 \
+       --plot-diagnostics \
+       --save-animated-diagnostics
+
+2. Inverted Pendulum Swing-Up (defaults handle cost/guess/params):
+   -----------------------------------------------------------------
+   # First, ensure the swing-up parameters with unlimited pole angle exist:
+   # python src/environments/extract_params.py --unlimit-pole --output-suffix _swingup
+
+   python scripts/evaluate_mpc_controller.py \
+       --env-id Pendulum-SwingUp \
+       --num-episodes 1 \
+       --max-steps 500 \
+       --horizon 80 \
+       --q-diag 0.1 5 0.1 0.1 \
+       --r-val 0.01 \
+       --q-terminal-multiplier 10 \
+       --plot-diagnostics \
+       --save-animated-diagnostics
+
+Notes:
+- Use '--render-mode human' for real-time visualization (can be slow).
+- Adjust '--q-diag', '--r-val', '--q-terminal-multiplier', and '--horizon' 
+  to tune MPC performance for specific tasks.
+- Check the 'runs/MPC/' directory for saved results (plots, videos, configs, summaries).
+"""
+
 import sys
 from pathlib import Path
 import matplotlib.animation as animation
@@ -20,7 +67,11 @@ import numpy as np
 import casadi as ca
 
 # Import swing-up environments to register them
-import src.environments.swing_up_envs # Ensure registration happens
+# import src.environments.swing_up_envs # Old way
+# Explicitly import and call registration function
+from src.environments.swing_up_envs.pendulum_su import register_pendulum_swing_up
+register_pendulum_swing_up() 
+
 from src.environments.wrappers import InvertedPendulumComparisonWrapper # Keep for potential use
 
 import matplotlib
@@ -81,43 +132,78 @@ def create_animated_diagnostics(history, episode=0):
     
     # Pre-compute axis limits
     all_states = np.array([step["obs"] for step in history])
-    all_controls = np.array([step["u_next"] for step in history])
-    all_costs = np.array([step["cost"] for step in history])
-    all_constraints = np.array([step["constraint_violation"] for step in history])
-    
-    # Set fixed axis limits
+    all_controls = np.array([step.get("u_next", np.nan) for step in history]) # Use get for safety
+    all_costs = np.array([step.get("cost", np.nan) for step in history])
+    all_constraints = np.array([step.get("constraint_violation", np.nan) for step in history])
+    finite_costs_constraints = np.concatenate([all_costs, all_constraints])
+
+    # Set fixed axis limits, using finite values or defaults
     axs[0].set_xlim(0, len(history))
-    axs[0].set_ylim(all_states.min() - 0.1, all_states.max() + 0.1)
+    axs[0].set_ylim((all_states.min() - 0.1) if all_states.size > 0 else -1,
+                    (all_states.max() + 0.1) if all_states.size > 0 else 1)
     
     axs[1].set_xlim(0, len(history))
-    axs[1].set_ylim(all_controls.min() - 0.1, all_controls.max() + 0.1)
+    axs[1].set_ylim((all_controls.min() - 0.1) if all_controls.size > 0 else -1,
+                    (all_controls.max() + 0.1) if all_controls.size > 0 else 1)
     
     axs[2].set_xlim(0, len(history))
-    axs[2].set_ylim(min(all_costs.min(), all_constraints.min()) - 0.1, 
-                   max(all_costs.max(), all_constraints.max()) + 0.1)
+    axs[2].set_ylim((finite_costs_constraints.min() - 0.1 * abs(finite_costs_constraints.min())) if finite_costs_constraints.size > 0 else 0, 
+                   (finite_costs_constraints.max() + 0.1 * abs(finite_costs_constraints.max())) if finite_costs_constraints.size > 0 else 1)
     
     # Animation update function
     def update(frame):
         # Update actual state lines
         time_indices = np.arange(frame + 1)
+        current_history = history[:frame+1]
         for i in range(4):
-            actual_lines[i].set_data(time_indices, [step["obs"][i] for step in history[:frame+1]])
+            actual_lines[i].set_data(time_indices, [step["obs"][i] for step in current_history])
         
-        # Update forecast lines
-        if frame < len(history):
-            forecast_times = np.arange(frame, frame + history[frame]["X_sol"].shape[1])
+        # Update forecast lines - Check if data exists for this frame
+        forecast_data_missing = False # Flag
+        if frame < len(history) and "X_sol" in history[frame] and history[frame]["X_sol"] is not None:
+            forecast_steps = history[frame]["X_sol"].shape[1]
+            forecast_times = np.arange(frame, frame + forecast_steps)
             for i in range(4):
                 forecast_lines[i].set_data(forecast_times, history[frame]["X_sol"][i, :])
-        
+        else: # Clear forecast lines if no data
+             forecast_data_missing = True
+             for i in range(4):
+                 forecast_lines[i].set_data([], [])
+
         # Update control lines
-        actual_control.set_data(time_indices, [step["u_next"] for step in history[:frame+1]])
-        if frame < len(history):
-            forecast_control.set_data(forecast_times[:-1], history[frame]["U_sol"][0, :])
+        actual_control.set_data(time_indices, [step.get("u_next", np.nan) for step in current_history]) # Use get
+        # Check if data exists
+        if frame < len(history) and "U_sol" in history[frame] and history[frame]["U_sol"] is not None:
+            if 'forecast_steps' in locals(): 
+                 forecast_control.set_data(forecast_times[:-1], history[frame]["U_sol"][0, :])
+            else: 
+                 forecast_data_missing = True # Mark as missing if X_sol wasn't plotted
+                 forecast_control.set_data([], [])
+        else: # Clear forecast control line if no data
+             forecast_data_missing = True
+             forecast_control.set_data([], [])
+
+        # Print warning if forecast data was missing for this frame
+        if forecast_data_missing and frame > 0: # Avoid warning on frame 0 if solver fails instantly
+             # Print only occasionally to avoid spamming console
+             if frame % 50 == 0: 
+                 print(f"\nWarning: Forecast data missing for frame {frame}. Solver might be failing.")
+
+        # Update cost and constraint lines - Check for existence
+        costs = [step.get("cost", np.nan) for step in current_history]
+        constraints = [step.get("constraint_violation", np.nan) for step in current_history]
+        cost_line.set_data(time_indices, costs)
+        constraint_line.set_data(time_indices, constraints)
         
-        # Update cost and constraint lines
-        cost_line.set_data(time_indices, [step["cost"] for step in history[:frame+1]])
-        constraint_line.set_data(time_indices, [step["constraint_violation"] for step in history[:frame+1]])
-        
+        # Dynamically update axes limits for cost/constraint if needed (optional)
+        # This prevents extreme values from making plot useless if solver fails early
+        valid_costs = [c for c in costs if c is not None and np.isfinite(c)]
+        valid_constraints = [c for c in constraints if c is not None and np.isfinite(c)]
+        if valid_costs or valid_constraints:
+            min_val = min(valid_costs + valid_constraints) if (valid_costs + valid_constraints) else 0
+            max_val = max(valid_costs + valid_constraints) if (valid_costs + valid_constraints) else 1
+            axs[2].set_ylim(min_val - 0.1 * abs(min_val), max_val + 0.1 * abs(max_val))
+            
         return actual_lines + forecast_lines + [actual_control, forecast_control, cost_line, constraint_line]
     
     # Create animation
@@ -233,28 +319,18 @@ def run_mpc_experiment(args):
     print(f"Configuration saved to {config_path}")
 
     # --- Environment Setup --- 
-    # Use wrapper for swing-up task if specified
-    if args.env_id == "Pendulum-SwingUp":
-        # Swing-up env has its own reset logic, use standard make
-        try:
-            # Need to ensure Pendulum-SwingUp is registered
-            src.environments.swing_up_envs.pendulum_su.register_pendulum_swing_up()
-            env = gym.make(args.env_id, render_mode=args.render_mode)
-            print("Using Pendulum-SwingUp environment.")
-        except gym.error.Error as e:
-            print(f"Error creating {args.env_id}. Is it registered? Error: {e}")
-            sys.exit(1)
-    else:
-        # For standard balance or comparison, use wrapper to control reset/termination
-        try:
-             base_env = gym.make(args.env_id, render_mode=args.render_mode)
-             # Apply wrapper to allow setting initial state and prevent termination
-             env = InvertedPendulumComparisonWrapper(base_env)
-             print(f"Using standard {args.env_id} with ComparisonWrapper.")
-        except gym.error.Error as e:
-             print(f"Error creating {args.env_id}. Error: {e}")
-             sys.exit(1)
-             
+    # The registration logic now handles applying the correct wrappers based on ID.
+    # We simply need to call gym.make.
+    try:
+        # Ensure registration has happened (called at the top of the script now)
+        env = gym.make(args.env_id, render_mode=args.render_mode)
+        print(f"Successfully created environment: {args.env_id}")
+        # Determine if it's a swing-up task for later logic (e.g., reset messages)
+        is_swingup_task = "SwingUp" in args.env_id
+    except gym.error.Error as e:
+        print(f"Error creating environment '{args.env_id}'. Is it registered correctly? Error: {e}")
+        sys.exit(1)
+
     # Determine state/action dimensions (assuming Box spaces)
     try:
         state_dim = env.observation_space.shape[0]
@@ -278,9 +354,11 @@ def run_mpc_experiment(args):
     controller = MPCController(
         N=args.horizon,
         dt=mpc_dt,
-        param_path=args.param_path 
+        param_path=args.param_path,
+        cost_type=args.cost_type,
+        guess_type=args.guess_type
     )
-    print(f"MPC Initialized with N={controller.N}, dt={controller.dt}")
+    print(f"MPC Initialized with N={controller.N}, dt={controller.dt}, CostType={controller.cost_type}, GuessType={args.guess_type}")
 
     # Override Q and R if provided via CLI args
     try:
@@ -288,10 +366,16 @@ def run_mpc_experiment(args):
              q_diag_vals = [float(x) for x in args.q_diag]
              if len(q_diag_vals) == state_dim:
                  controller.Q = ca.diag(q_diag_vals)
-                 controller.Q_terminal = 5.0 * controller.Q # Keep proportional
+                 controller.Q_terminal = args.q_terminal_multiplier * controller.Q 
                  print(f"Overrode MPC Q matrix (diag): {q_diag_vals}")
+                 print(f"Set Q_terminal multiplier to: {args.q_terminal_multiplier}")
              else:
                  print(f"Warning: --q-diag length ({len(q_diag_vals)}) != state_dim ({state_dim}). Using default Q.")
+        # If Q wasn't overridden but multiplier was, update Q_terminal based on default Q
+        elif args.q_terminal_multiplier != 5.0: # Check if multiplier differs from default
+             controller.Q_terminal = args.q_terminal_multiplier * controller.Q 
+             print(f"Using default Q, but set Q_terminal multiplier to: {args.q_terminal_multiplier}")
+             
         if args.r_val:
              if control_dim == 1: # Scalar R
                  controller.R = ca.DM([args.r_val])
@@ -301,7 +385,7 @@ def run_mpc_experiment(args):
                  controller.R = ca.diag(r_diag)
                  print(f"Overrode MPC R matrix (diag): {r_diag}")
     except Exception as e:
-        print(f"Error overriding Q/R matrices: {e}. Using defaults.")
+        print(f"Error overriding Q/R/Q_terminal matrices: {e}. Using defaults.")
 
     # --- Run Episodes --- 
     episode_rewards = []
@@ -310,14 +394,14 @@ def run_mpc_experiment(args):
     for episode in range(args.num_episodes):
         print(f"\n--- Starting Episode {episode} --- ")
         # Reset environment - use wrapper's initial state if applicable
-        if isinstance(env, InvertedPendulumComparisonWrapper) and args.env_id != "Pendulum-SwingUp":
-            # Force starting state for non-swingup tasks using the wrapper
-            initial_state = np.array([0.0, 0.1, 0.0, 0.0]) 
-            obs, info = env.reset(initial_state=initial_state)
-            print(f"Resetting env with wrapper state: {initial_state}")
+        # The PendulumSwingUp wrapper (applied internally via make_env) handles the reset logic.
+        obs, info = env.reset() 
+        # Print appropriate reset message
+        if is_swingup_task:
+             print(f"Resetting env for swing-up: {args.env_id}")
+             # Obs should be near [0, -pi, 0, 0] after wrapper reset
         else:
-            obs, info = env.reset() # Use env's default reset (e.g., for swing-up)
-            print(f"Resetting env with default state: {obs}")
+             print(f"Resetting env {args.env_id} with default state: {obs}")
 
         obs = np.array(obs, dtype=np.float64)
         history = []
@@ -418,15 +502,65 @@ if __name__ == "__main__":
     parser.add_argument("--save-animated-diagnostics", action="store_true", default=True, help="Generate and save animated diagnostic plots for each episode (default: True)")
 
     # --- MPC Args --- 
-    parser.add_argument("--param-path", type=str, default="src/environments/inverted_pendulum_params.json", help="Path to environment parameters JSON for MPC")
+    parser.add_argument("--cost-type", type=str, default=None, choices=['quadratic', 'pendulum_swingup'], help="Cost function type for MPC (default: depends on env)")
+    parser.add_argument("--guess-type", type=str, default=None, choices=['basic', 'warmstart', 'pendulum_heuristic'], help="Initial guess strategy for MPC (default: depends on env)")
+    parser.add_argument("--param-path", type=str, default=None, help="Path to environment parameters JSON for MPC (default: depends on env)")
     parser.add_argument("--horizon", "-N", type=int, default=30, help="MPC prediction horizon")
-    # Allow overriding Q (diagonal) and R (scalar/diagonal)
     parser.add_argument("--q-diag", type=str, nargs='+', default=None, help="Diagonal elements for Q matrix (e.g., 1.0 20.0 5.0 10.0)")
     parser.add_argument("--r-val", type=float, default=None, help="Value for R matrix (scalar or diagonal if control_dim > 1)")
+    parser.add_argument("--q-terminal-multiplier", type=float, default=5.0, help="Multiplier for Q to get Q_terminal (default: 5.0)")
 
     args = parser.parse_args()
     
-    # Create save directory if it doesn't exist
+    # --- Set Default Strategies and Param Path based on Environment --- 
+    DEFAULT_CONFIGS = {
+        "InvertedPendulum-v5": {
+            "cost": "quadratic", 
+            "guess": "warmstart", 
+            "params": "src/environments/inverted_pendulum_params.json"
+        },
+        "Pendulum-SwingUp": { # This key is now just for reference, logic below uses the unlimited one
+            "cost": "pendulum_atan2", 
+            "guess": "pendulum_heuristic",
+            "params": "src/environments/inverted_pendulum_params_swingup.json" 
+        },
+        # Add entry for the unlimited version which will actually be used by default logic now
+        "Pendulum-SwingUpUnlimited-v0": {
+            "cost": "pendulum_atan2", 
+            "guess": "pendulum_heuristic",
+            # Assumes you generated this file using --unlimit-pole!
+            "params": "src/environments/inverted_pendulum_params_swingup.json" 
+        },
+        # Add entries for DoublePendulum tasks later
+    }
+    
+    # Set defaults if not provided
+    # Determine the target env_id for default lookup
+    target_env_id_for_defaults = args.env_id
+    # Special case: If user asks for Pendulum-SwingUp, use the Unlimited version for MPC defaults
+    if args.env_id == "Pendulum-SwingUp-v0": 
+         print(f"Note: Env ID '{args.env_id}' requested, but using defaults for 'Pendulum-SwingUpUnlimited-v0' for MPC.")
+         target_env_id_for_defaults = "Pendulum-SwingUpUnlimited-v0"
+    
+    if target_env_id_for_defaults in DEFAULT_CONFIGS:
+        defaults = DEFAULT_CONFIGS[target_env_id_for_defaults]
+        if args.cost_type is None:
+            args.cost_type = defaults["cost"]
+            print(f"Using default cost_type '{args.cost_type}' for env '{args.env_id}' (based on {target_env_id_for_defaults})")
+        if args.guess_type is None:
+            args.guess_type = defaults["guess"]
+            print(f"Using default guess_type '{args.guess_type}' for env '{args.env_id}' (based on {target_env_id_for_defaults})")
+        if args.param_path is None:
+            args.param_path = defaults["params"]
+            print(f"Using default param_path '{args.param_path}' for env '{args.env_id}' (based on {target_env_id_for_defaults})")
+    else:
+        # Fallbacks if env not in map
+        print(f"Warning: Env '{args.env_id}' not in DEFAULT_CONFIGS map.")
+        if args.cost_type is None: args.cost_type = "quadratic"
+        if args.guess_type is None: args.guess_type = "warmstart"
+        if args.param_path is None: args.param_path = "src/environments/inverted_pendulum_params.json"
+        print(f"Using fallback defaults: cost='{args.cost_type}', guess='{args.guess_type}', params='{args.param_path}'.")
+            
+    # --- Proceed with Experiment --- 
     Path(args.save_dir).mkdir(parents=True, exist_ok=True)
-
     run_mpc_experiment(args)

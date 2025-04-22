@@ -11,118 +11,153 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 # Import the cost function classes
-from src.algorithms.classic.mpc_costs import QuadraticCost, PendulumSwingupCost
+from src.algorithms.classic.mpc_costs import QuadraticCost, PendulumSwingupCost, PendulumSwingupAtan2Cost
 
 def visualize_costs():
     print("Visualizing MPC cost functions...")
 
     # --- Configuration ---
-    # Dummy weights (adjust if needed to highlight differences)
     Q_diag = [0.1, 5.0, 0.1, 0.1] # Example weights [x, theta, xd, thd]
     R_val = 0.01
-    
     Q = ca.diag(Q_diag)
     R = ca.DM([R_val])
     
     # Instantiate cost calculators
     quad_cost_calc = QuadraticCost()
     swingup_cost_calc = PendulumSwingupCost()
+    atan2_cost_calc = PendulumSwingupAtan2Cost()
     
-    # Reference state (upright)
     X_ref = ca.DM.zeros(4, 1)
-    
-    # Define symbolic variables needed for evaluation
     Xk_sym = ca.SX.sym('Xk', 4)
     Uk_sym = ca.SX.sym('Uk', 1)
     
-    # Create CasADi functions for numerical evaluation
-    quad_cost_func = ca.Function('quad_cost', [Xk_sym, Uk_sym], 
-                                 [quad_cost_calc.calculate_stage_cost(Xk_sym, Uk_sym, X_ref, Q, R)])
-    swingup_cost_func = ca.Function('swingup_cost', [Xk_sym, Uk_sym], 
-                                  [swingup_cost_calc.calculate_stage_cost(Xk_sym, Uk_sym, X_ref, Q, R)])
+    # Create CasADi functions
+    quad_cost_func = ca.Function('quad_cost', [Xk_sym, Uk_sym], [quad_cost_calc.calculate_stage_cost(Xk_sym, Uk_sym, X_ref, Q, R)])
+    swingup_cost_func = ca.Function('swingup_cost', [Xk_sym, Uk_sym], [swingup_cost_calc.calculate_stage_cost(Xk_sym, Uk_sym, X_ref, Q, R)])
+    atan2_cost_func = ca.Function('atan2_cost', [Xk_sym, Uk_sym], [atan2_cost_calc.calculate_stage_cost(Xk_sym, Uk_sym, X_ref, Q, R)])
 
-    # --- Plot 1: Cost vs. Theta --- 
+    # --- Create Figure and Axes (2x3 layout) --- 
+    fig, axs = plt.subplots(2, 3, figsize=(21, 10))
+    fig.suptitle(f'Comparison of MPC Cost Components (Q_diag={Q_diag}, R={R_val})')
+
+    # --- Plot 1: Cost vs. Theta (axs[0, 0]) --- 
     print("Plotting Cost vs. Theta...")
-    theta_range = np.linspace(-np.pi - 0.5, np.pi + 0.5, 200)
+    theta_range = np.linspace(-2*np.pi - 0.5, 2*np.pi + 0.5, 400)
     costs_quad_theta = []
     costs_swingup_theta = []
-    
-    # Evaluate costs at x=0, xd=0, thd=0, u=0
+    costs_atan2_theta = []
     state_base = np.array([0.0, 0.0, 0.0, 0.0])
     control_val = np.array([0.0])
     
     for theta in theta_range:
-        state = state_base.copy()
-        state[1] = theta
+        state = state_base.copy(); state[1] = theta
         costs_quad_theta.append(quad_cost_func(state, control_val).full().item())
         costs_swingup_theta.append(swingup_cost_func(state, control_val).full().item())
+        costs_atan2_theta.append(atan2_cost_func(state, control_val).full().item())
         
-    plt.figure(figsize=(10, 6))
-    plt.plot(theta_range, costs_quad_theta, label='Quadratic Cost (on Theta)')
-    plt.plot(theta_range, costs_swingup_theta, label='Swingup Cost (1 - cos(Theta))', linestyle='--')
-    plt.xlabel('Pole Angle (theta) [rad]')
-    plt.ylabel('Stage Cost (Example Q/R)')
-    plt.title('Comparison of Cost Functions vs. Pole Angle')
-    # Add vertical lines for key angles
-    plt.axvline(0, color='grey', linestyle=':', label='Upright (0 rad)')
-    plt.axvline(np.pi, color='red', linestyle=':', label='Down (+pi rad)')
-    plt.axvline(-np.pi, color='red', linestyle=':')
-    plt.legend()
-    plt.grid(True)
-    plt.ylim(bottom=-0.5) # Start y-axis slightly below 0
-    plt.show()
+    ax = axs[0, 0]
+    max_y_non_quad = max(np.max(costs_swingup_theta), np.max(costs_atan2_theta)) * 1.1
+    min_y_non_quad = min(np.min(costs_swingup_theta), np.min(costs_atan2_theta)) - 0.5
+    ax.set_ylim(min_y_non_quad, max_y_non_quad)
+    
+    ax.plot(theta_range, costs_swingup_theta, label='Cos Cost (1-cos)', linestyle='--')
+    ax.plot(theta_range, costs_atan2_theta, label='Atan2 Cost (atan2^2)', linestyle=':')
+    ax.plot(theta_range, costs_quad_theta, label='Quad Cost (theta^2)')
+    ax.set_xlabel('Pole Angle (theta) [rad]')
+    ax.set_ylabel('Stage Cost')
+    ax.set_title('Cost vs. Pole Angle')
+    for k in [-2, -1, 0, 1, 2]:
+        label = f'{k}pi rad' if k != 0 else 'Upright (0 rad)'
+        color = 'red' if k != 0 else 'grey'
+        ax.axvline(k * np.pi, color=color, linestyle=':', label=label if k in [-1, 0, 1] else None)
+    ax.legend()
+    ax.grid(True)
 
-    # --- Plot 2: Cost vs. Cart Position --- 
+    # --- Plot 2: Cost vs. Cart Position (axs[0, 1]) --- 
     print("Plotting Cost vs. Cart Position...")
     x_range = np.linspace(-1.5, 1.5, 100)
-    costs_quad_x = []
-    costs_swingup_x = []
-    
-    # Evaluate costs at theta=0, xd=0, thd=0, u=0
-    state_base = np.array([0.0, 0.0, 0.0, 0.0])
-    control_val = np.array([0.0])
-
+    costs_quad_x = []; costs_swingup_x = []; costs_atan2_x = []
+    state_base = np.array([0.0, 0.0, 0.0, 0.0]); control_val = np.array([0.0])
     for x in x_range:
-        state = state_base.copy()
-        state[0] = x
+        state = state_base.copy(); state[0] = x
         costs_quad_x.append(quad_cost_func(state, control_val).full().item())
         costs_swingup_x.append(swingup_cost_func(state, control_val).full().item())
-
-    plt.figure(figsize=(10, 6))
-    # Note: In this slice, the swingup cost only differs if Q[0,0] is different,
-    # which isn't the primary change. They might look identical here.
-    plt.plot(x_range, costs_quad_x, label='Quadratic Cost (on x)')
-    plt.plot(x_range, costs_swingup_x, label='Swingup Cost (on x)', linestyle='--') # Still quadratic for x
-    plt.xlabel('Cart Position (x) [m]')
-    plt.ylabel('Stage Cost (Example Q/R)')
-    plt.title('Comparison of Cost Functions vs. Cart Position')
-    plt.legend()
-    plt.grid(True)
-    plt.show()
+        costs_atan2_x.append(atan2_cost_func(state, control_val).full().item())
+    ax = axs[0, 1]
+    ax.plot(x_range, costs_quad_x, label='Quad Cost')
+    ax.plot(x_range, costs_swingup_x, label='Cos Cost', linestyle='--') 
+    ax.plot(x_range, costs_atan2_x, label='Atan2 Cost', linestyle=':')
+    ax.set_xlabel('Cart Position (x) [m]')
+    ax.set_ylabel('Stage Cost')
+    ax.set_title('Cost vs. Cart Position')
+    ax.legend()
+    ax.grid(True)
     
-    # --- Plot 3: Cost vs. Control Input --- 
+    # --- Plot 3: Cost vs. Control Input (axs[0, 2]) --- 
     print("Plotting Cost vs. Control Input...")
     u_range = np.linspace(-4, 4, 100)
-    costs_quad_u = []
-    costs_swingup_u = []
-    
-    # Evaluate costs at state = [0,0,0,0]
+    costs_quad_u = []; costs_swingup_u = []; costs_atan2_u = []
     state_base = np.array([0.0, 0.0, 0.0, 0.0])
-
     for u in u_range:
         control_val = np.array([u])
         costs_quad_u.append(quad_cost_func(state_base, control_val).full().item())
         costs_swingup_u.append(swingup_cost_func(state_base, control_val).full().item())
+        costs_atan2_u.append(atan2_cost_func(state_base, control_val).full().item())
+    ax = axs[0, 2]
+    ax.plot(u_range, costs_quad_u, label='Quad Cost')
+    ax.plot(u_range, costs_swingup_u, label='Cos Cost', linestyle='--')
+    ax.plot(u_range, costs_atan2_u, label='Atan2 Cost', linestyle=':')
+    ax.set_xlabel('Control Input (u) [N]')
+    ax.set_ylabel('Stage Cost')
+    ax.set_title('Cost vs. Control Input')
+    ax.legend()
+    ax.grid(True)
 
-    plt.figure(figsize=(10, 6))
-    # Note: The control cost term is identical in both formulations.
-    plt.plot(u_range, costs_quad_u, label='Quadratic Cost (on u)')
-    plt.plot(u_range, costs_swingup_u, label='Swingup Cost (on u)', linestyle='--') # Identical control cost term
-    plt.xlabel('Control Input (u) [N]')
-    plt.ylabel('Stage Cost (Example Q/R)')
-    plt.title('Comparison of Cost Functions vs. Control Input')
-    plt.legend()
-    plt.grid(True)
+    # --- Plot 4: Cost vs. Cart Velocity (axs[1, 0]) --- 
+    print("Plotting Cost vs. Cart Velocity...")
+    x_dot_range = np.linspace(-2.0, 2.0, 100)
+    costs_quad_xd = []; costs_swingup_xd = []; costs_atan2_xd = []
+    state_base = np.array([0.0, 0.0, 0.0, 0.0]); control_val = np.array([0.0])
+    for x_dot in x_dot_range:
+        state = state_base.copy(); state[2] = x_dot
+        costs_quad_xd.append(quad_cost_func(state, control_val).full().item())
+        costs_swingup_xd.append(swingup_cost_func(state, control_val).full().item())
+        costs_atan2_xd.append(atan2_cost_func(state, control_val).full().item())
+    ax = axs[1, 0]
+    ax.plot(x_dot_range, costs_quad_xd, label='Quad Cost')
+    ax.plot(x_dot_range, costs_swingup_xd, label='Cos Cost', linestyle='--')
+    ax.plot(x_dot_range, costs_atan2_xd, label='Atan2 Cost', linestyle=':')
+    ax.set_xlabel('Cart Velocity (x_dot) [m/s]')
+    ax.set_ylabel('Stage Cost')
+    ax.set_title('Cost vs. Cart Velocity')
+    ax.legend()
+    ax.grid(True)
+
+    # --- Plot 5: Cost vs. Pole Velocity (axs[1, 1]) --- 
+    print("Plotting Cost vs. Pole Velocity...")
+    theta_dot_range = np.linspace(-4.0, 4.0, 100)
+    costs_quad_thd = []; costs_swingup_thd = []; costs_atan2_thd = []
+    state_base = np.array([0.0, 0.0, 0.0, 0.0]); control_val = np.array([0.0])
+    for theta_dot in theta_dot_range:
+        state = state_base.copy(); state[3] = theta_dot
+        costs_quad_thd.append(quad_cost_func(state, control_val).full().item())
+        costs_swingup_thd.append(swingup_cost_func(state, control_val).full().item())
+        costs_atan2_thd.append(atan2_cost_func(state, control_val).full().item())
+    ax = axs[1, 1]
+    ax.plot(theta_dot_range, costs_quad_thd, label='Quad Cost')
+    ax.plot(theta_dot_range, costs_swingup_thd, label='Cos Cost', linestyle='--')
+    ax.plot(theta_dot_range, costs_atan2_thd, label='Atan2 Cost', linestyle=':')
+    ax.set_xlabel('Pole Angular Velocity (theta_dot) [rad/s]')
+    ax.set_ylabel('Stage Cost')
+    ax.set_title('Cost vs. Pole Velocity')
+    ax.legend()
+    ax.grid(True)
+
+    # --- Plot 6: Empty (axs[1, 2]) --- 
+    axs[1, 2].axis('off')
+
+    # --- Show Plot --- 
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.show()
 
 if __name__ == "__main__":
