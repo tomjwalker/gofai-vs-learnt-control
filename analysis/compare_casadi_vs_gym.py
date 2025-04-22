@@ -169,3 +169,126 @@ plt.tight_layout(rect=[0, 0, 1, 0.96])
 plt.show()
 
 print("State plots closed.") 
+
+
+# --- Simulation 2: Bang-Bang Control --- 
+print("\n--- Starting Simulation 2: Bang-Bang Control ---")
+# SIM_STEPS_BB = 40 # Shorter duration for controlled test
+# CONTROL_SEQUENCE = np.array(
+#     [3.0] * (SIM_STEPS_BB // 2) + 
+#     [-3.0] * (SIM_STEPS_BB - SIM_STEPS_BB // 2)
+# )
+SIM_STEPS_BB = 20 
+n_cycles = 5
+half_cycle_duration = max(1, SIM_STEPS_BB // (2 * n_cycles)) # e.g., 100 // 20 = 5
+
+control_pattern = [-3.0] * half_cycle_duration + [3.0] * half_cycle_duration
+CONTROL_SEQUENCE = np.tile(control_pattern, n_cycles)
+
+# Adjust length if SIM_STEPS_BB wasn't perfectly divisible
+if len(CONTROL_SEQUENCE) > SIM_STEPS_BB:
+    CONTROL_SEQUENCE = CONTROL_SEQUENCE[:SIM_STEPS_BB]
+elif len(CONTROL_SEQUENCE) < SIM_STEPS_BB:
+    # Append the last value to fill up
+    fill_value = CONTROL_SEQUENCE[-1] if len(CONTROL_SEQUENCE) > 0 else 0.0
+    CONTROL_SEQUENCE = np.append(CONTROL_SEQUENCE, [fill_value] * (SIM_STEPS_BB - len(CONTROL_SEQUENCE)))
+
+
+# --- Simulate Gymnasium with Bang-Bang --- 
+print(f"Simulating Gym environment '{ENV_ID}' with Bang-Bang control...")
+env_bb = InvertedPendulumComparisonWrapper(gym.make(ENV_ID))
+obs_gym_bb, info_gym_bb = env_bb.reset(initial_state=CASADI_INITIAL_STATE)
+gym_states_bb = np.zeros((SIM_STEPS_BB + 1, len(obs_gym_bb)))
+gym_states_bb[0, :] = obs_gym_bb
+for i in range(SIM_STEPS_BB):
+    action_gym = [CONTROL_SEQUENCE[i]] 
+    obs_gym_bb, reward_gym_bb, terminated_gym_bb, truncated_gym_bb, info_gym_bb = env_bb.step(action_gym)
+    gym_states_bb[i + 1, :] = obs_gym_bb
+    if terminated_gym_bb or truncated_gym_bb: 
+        print(f"Gym (Bang-Bang) simulation stopped at step {i+1}.")
+        SIM_STEPS_BB = i 
+        gym_states_bb = gym_states_bb[:SIM_STEPS_BB+1, :]
+        CONTROL_SEQUENCE = CONTROL_SEQUENCE[:SIM_STEPS_BB] # Truncate control too
+        break
+env_bb.close()
+print("Gym (Bang-Bang) simulation complete.")
+
+# --- Simulate CasADi with Bang-Bang --- 
+print(f"Simulating CasADi model with Bang-Bang control...")
+casadi_states_bb = np.zeros((SIM_STEPS_BB + 1, 4))
+casadi_states_bb[0, :] = CASADI_INITIAL_STATE
+current_x_casadi_bb = CASADI_INITIAL_STATE
+for i in range(SIM_STEPS_BB): # Use potentially updated SIM_STEPS_BB
+    control_input_bb = np.array([CONTROL_SEQUENCE[i]])
+    x_next_dm_bb = dynamics_func(ca.DM(current_x_casadi_bb), ca.DM(control_input_bb))
+    current_x_casadi_bb = x_next_dm_bb.full().flatten()
+    casadi_states_bb[i + 1, :] = current_x_casadi_bb
+    if np.any(np.isnan(current_x_casadi_bb)):
+         print(f"CasADi (Bang-Bang) simulation stopped at step {i+1} due to NaN state.")
+         SIM_STEPS_BB = i 
+         casadi_states_bb = casadi_states_bb[:SIM_STEPS_BB+1, :]
+         gym_states_bb = gym_states_bb[:SIM_STEPS_BB+1, :] 
+         CONTROL_SEQUENCE = CONTROL_SEQUENCE[:SIM_STEPS_BB]
+         break      
+print("CasADi (Bang-Bang) simulation complete.")
+
+# --- Animation for Bang-Bang Simulation --- 
+print("Generating animation for Bang-Bang control...")
+fig_anim_bb, ax_anim_bb = plt.subplots()
+ax_anim_bb.set_aspect('equal')
+ax_anim_bb.set_xlabel("Cart Position (m)")
+ax_anim_bb.set_ylabel("Vertical Position (m)")
+ax_anim_bb.set_title(f"CasADi ({INTEGRATION_METHOD}) Simulation (Bang-Bang Control)")
+max_cart_pos_bb = np.max(np.abs(casadi_states_bb[:, 0]))
+ax_anim_bb.set_xlim(casadi_states_bb[0, 0] - max_cart_pos_bb - pole_vis_length * 1.2, 
+               casadi_states_bb[0, 0] + max_cart_pos_bb + pole_vis_length * 1.2)
+ax_anim_bb.set_ylim(-pole_vis_length * 1.2, pole_vis_length * 1.2)
+cart_bb = plt.Rectangle((0, -cart_height/2), cart_width, cart_height, fc='blue')
+ax_anim_bb.add_patch(cart_bb)
+pole_bb, = ax_anim_bb.plot([], [], 'r-', lw=3)
+pivot_bb, = ax_anim_bb.plot([], [], 'ko', ms=5)
+time_text_bb = ax_anim_bb.text(0.05, 0.95, '', transform=ax_anim_bb.transAxes, va='top')
+
+def update_bb(frame):
+    x, theta = casadi_states_bb[frame, 0], casadi_states_bb[frame, 1]
+    cart_x = x - cart_width / 2
+    cart_bb.set_xy((cart_x, -cart_height / 2))
+    pivot_x, pivot_y = x, 0
+    pole_end_x = pivot_x + pole_vis_length * np.sin(theta)
+    pole_end_y = pivot_y + pole_vis_length * np.cos(theta)
+    pole_bb.set_data([pivot_x, pole_end_x], [pivot_y, pole_end_y])
+    pivot_bb.set_data([pivot_x], [pivot_y])
+    time_text_bb.set_text(f'Time: {frame * DT:.2f}s, u: {CONTROL_SEQUENCE[frame] if frame < len(CONTROL_SEQUENCE) else "N/A"}')
+    return cart_bb, pole_bb, pivot_bb, time_text_bb
+
+ani_bb = animation.FuncAnimation(fig_anim_bb, update_bb, frames=SIM_STEPS_BB + 1, 
+                               interval=DT * 1000, blit=True, repeat=False)
+plt.grid(True)
+plt.show()
+print("Bang-Bang Animation closed.")
+
+# --- Static Plots for Bang-Bang Simulation --- 
+print("Generating comparison state plots for Bang-Bang control...")
+time_vector_bb = np.arange(SIM_STEPS_BB + 1) * DT 
+fig_states_bb, axs_bb = plt.subplots(5, 1, sharex=True, figsize=(10, 10))
+fig_states_bb.suptitle('State & Control vs Time: CasADi Model vs Gym Sim (Bang-Bang)')
+
+for i, ax_i in enumerate(axs_bb[:4]): # Plot first 4 states
+    idx = casadi_indices[i]
+    ax_i.plot(time_vector_bb, casadi_states_bb[:, idx], label='CasADi Model')
+    ax_i.plot(time_vector_bb, gym_states_bb[:, idx], linestyle='--', label='Gym Sim') 
+    ax_i.set_ylabel(state_labels[i])
+    ax_i.grid(True)
+    ax_i.legend()
+
+# Plot control input
+axs_bb[4].plot(time_vector_bb[:-1], CONTROL_SEQUENCE, label='Applied Control (u)') # Control applies over interval
+axs_bb[4].set_ylabel('Control Input [N]')
+axs_bb[4].grid(True)
+axs_bb[4].legend()
+
+axs_bb[-1].set_xlabel("Time (s)")
+plt.tight_layout(rect=[0, 0, 1, 0.96]) 
+plt.show()
+
+print("Bang-Bang State plots closed.") 
