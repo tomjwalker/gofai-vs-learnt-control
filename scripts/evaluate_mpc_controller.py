@@ -79,6 +79,8 @@ matplotlib.use('TkAgg') # Consider making this conditional or configurable
 import matplotlib.pyplot as plt
 
 from src.algorithms.classic.mpc_controller import MPCController
+# Import the refactored plotting function
+from src.utils.plotting import plot_diagnostics 
 
 def create_animated_diagnostics(history, episode=0):
     """
@@ -239,63 +241,6 @@ def save_video(frames, filename="episode_video.mp4"):
     except Exception as e:
         print(f"Error saving video: {e}")
 
-def plot_diagnostics(history, plots_dir, episode=0):
-    """Generates and saves diagnostic plots for a single episode."""
-    print(f"Generating diagnostic plots for Episode {episode}...")
-    plots_dir.mkdir(parents=True, exist_ok=True) # Ensure plots dir exists
-    time_indices = np.arange(len(history))
-    env_states = np.array([step["obs"] for step in history])
-    controls = np.array([step["u_next"] for step in history])
-    costs = np.array([step["cost"] for step in history if "cost" in step]) # Handle potential missing keys
-    constraint_violations = np.array([step["constraint_violation"] for step in history if "constraint_violation" in step])
-
-    fig, axs = plt.subplots(3, 1, figsize=(12, 12), sharex=True)
-
-    # Plot States
-    state_labels = [f"State_{i}" for i in range(env_states.shape[1])] # Generic labels
-    if history:
-        # Use specific labels if obs shape matches known envs
-        if env_states.shape[1] == 4: # InvertedPendulum
-             state_labels = ["Cart Pos (x)", "Pole Angle (th)", "Cart Vel (x_dot)", "Pole Vel (th_dot)"]
-        # Add elif for other envs if needed
-    
-    for i in range(env_states.shape[1]):
-        axs[0].plot(time_indices, env_states[:, i], label=state_labels[i])
-    axs[0].set_title(f"Episode {episode}: Environment States")
-    axs[0].set_ylabel("State Value")
-    axs[0].legend()
-    axs[0].grid(True)
-
-    # Plot Control
-    axs[1].plot(time_indices, controls, marker='.', linestyle='-')
-    axs[1].set_title("MPC Control Input Over Time")
-    axs[1].set_ylabel("Force (N)") # Assuming force control
-    axs[1].grid(True)
-
-    # Plot Cost and Constraint Violation
-    if len(costs) == len(time_indices) and len(constraint_violations) == len(time_indices):
-        ax2 = axs[2].twinx()
-        axs[2].plot(time_indices, costs, 'b-', label='Cost')
-        axs[2].set_ylabel('Cost', color='b')
-        axs[2].tick_params(axis='y', labelcolor='b')
-        ax2.plot(time_indices, constraint_violations, 'r-', label='Constraint Violation')
-        ax2.set_ylabel('Constraint Violation', color='r')
-        ax2.tick_params(axis='y', labelcolor='r')
-        axs[2].set_title("MPC Cost and Constraint Violation")
-        lines1, labels1 = axs[2].get_legend_handles_labels()
-        lines2, labels2 = ax2.get_legend_handles_labels()
-        axs[2].legend(lines1 + lines2, labels1 + labels2, loc='upper right')
-    else:
-        axs[2].set_title("Cost/Constraint Data Unavailable or Mismatched Length")
-    axs[2].set_xlabel("Timestep")
-    axs[2].grid(True)
-
-    fig.tight_layout()
-    plot_filename = plots_dir / f"episode_{episode}_plots.png" # Save to plots_dir
-    plt.savefig(plot_filename)
-    print(f"Diagnostic plot saved to: {plot_filename}")
-    plt.close(fig) # Close figure to free memory
-
 def run_mpc_experiment(args):
     """Runs the MPC experiment based on parsed arguments."""
 
@@ -344,21 +289,31 @@ def run_mpc_experiment(args):
         
     # Get timestep for MPC
     try:
-        mpc_dt = env.unwrapped.dt
-        print(f"Using environment timestep for MPC: dt = {mpc_dt}")
+        dt_env = env.unwrapped.dt
+        print(f"Using environment timestep for env steps: dt_env = {dt_env}")
     except AttributeError:
-        print("Warning: Could not determine env dt. Using default dt=0.02 for MPC.")
-        mpc_dt = 0.02 
+        print("Warning: Could not determine env dt. Assuming dt_env=0.02.")
+        dt_env = 0.02 
+        
+    # Validate controller dt
+    dt_controller = args.dt_controller
+    if dt_controller < dt_env:
+        print(f"Warning: dt_controller ({dt_controller}) is less than dt_env ({dt_env}). Setting dt_controller = dt_env.")
+        dt_controller = dt_env
+        
+    # Calculate ZOH steps
+    hold_steps = max(1, int(round(dt_controller / dt_env)))
+    print(f"Controller dt: {dt_controller:.4f}, Env dt: {dt_env:.4f} => ZOH for {hold_steps} steps.")
 
     # --- MPC Controller Setup --- 
     controller = MPCController(
         N=args.horizon,
-        dt=mpc_dt,
+        dt_controller=dt_controller, # Use the specified controller dt
         param_path=args.param_path,
         cost_type=args.cost_type,
         guess_type=args.guess_type
     )
-    print(f"MPC Initialized with N={controller.N}, dt={controller.dt}, CostType={controller.cost_type}, GuessType={args.guess_type}")
+    print(f"MPC Initialized with N={controller.N}, dt={controller.dt_controller}, CostType={controller.cost_type}, GuessType={args.guess_type}")
 
     # Override Q and R if provided via CLI args
     try:
@@ -407,15 +362,34 @@ def run_mpc_experiment(args):
         history = []
         frames = []
         ep_reward = 0.0
+        last_action = np.zeros(control_dim) # Initialize last action
 
         for step in range(args.max_steps):
-            # Compute action
-            solver_outputs = controller.solve(obs)
-            u_next = solver_outputs["u_next"] 
-            action_to_apply = [u_next] # Gym expects list/array
-            if control_dim > 1:
-                 action_to_apply = u_next # If solve returns multi-dim control
+            
+            # --- Decide whether to solve or hold --- 
+            if step % hold_steps == 0:
+                # Time to solve MPC
+                # print(f"Step {step}: Solving MPC...") # Optional debug
+                solver_outputs = controller.solve(obs)
+                u_next = solver_outputs["u_next"] 
+                last_action = np.array([u_next]) # Store the new action (as numpy array)
+                if control_dim > 1:
+                     last_action = u_next # If solve returns multi-dim control
+            else:
+                # Apply previous action (Zero-Order Hold)
+                # print(f"Step {step}: Holding action {last_action}") # Optional debug
+                # We need to pass solver_outputs structure from the *last* solve for logging
+                # Get it from history if possible, otherwise use placeholders
+                if history:
+                    solver_outputs = {k: v for k, v in history[-1].items() if k in ["X_solution", "U_solution", "cost", "constraint_violation", "solver_status"]}
+                    solver_outputs['u_next'] = last_action.item() if control_dim == 1 else last_action # Log the held action
+                else: # Should not happen after first step
+                     solver_outputs = {"u_next": last_action.item() if control_dim == 1 else last_action, "cost": np.nan, "constraint_violation": np.nan, "solver_status": "held"}
+            # ----------------------------------------
 
+            # Ensure action has correct shape for env.step
+            action_to_apply = last_action.reshape((control_dim,)) 
+            
             # Step environment
             obs_next, reward, terminated, truncated, info = env.step(action_to_apply)
             obs_next = np.array(obs_next, dtype=np.float64)
@@ -451,9 +425,10 @@ def run_mpc_experiment(args):
             video_filename = videos_dir / f"episode_{episode}.mp4" # Save to videos_dir
             save_video(frames, str(video_filename))
             
-        # Save diagnostic plots for this episode
+        # Save diagnostic plots for this episode using imported function
         if args.plot_diagnostics:
-             plot_diagnostics(history, plots_dir, episode=episode) # Pass plots_dir
+             # plot_diagnostics(history, plots_dir, episode=episode) # Original call
+             plot_diagnostics(history, plots_dir, episode=episode, plot_cost=True) # Pass plot_cost=True for MPC
 
         # Save animated diagnostics for this episode
         if args.save_animated_diagnostics:
@@ -502,13 +477,14 @@ if __name__ == "__main__":
     parser.add_argument("--save-animated-diagnostics", action="store_true", default=True, help="Generate and save animated diagnostic plots for each episode (default: True)")
 
     # --- MPC Args --- 
-    parser.add_argument("--cost-type", type=str, default=None, choices=['quadratic', 'pendulum_swingup'], help="Cost function type for MPC (default: depends on env)")
-    parser.add_argument("--guess-type", type=str, default=None, choices=['basic', 'warmstart', 'pendulum_heuristic'], help="Initial guess strategy for MPC (default: depends on env)")
+    parser.add_argument("--cost-type", type=str, default=None, choices=['quadratic', 'pendulum_swingup', 'pendulum_atan2'], help="Cost function type for MPC (default: depends on env)")
+    parser.add_argument("--guess-type", type=str, default=None, choices=['basic', 'warmstart', 'pendulum_heuristic', 'hybrid'], help="Initial guess strategy for MPC (default: depends on env)")
     parser.add_argument("--param-path", type=str, default=None, help="Path to environment parameters JSON for MPC (default: depends on env)")
     parser.add_argument("--horizon", "-N", type=int, default=30, help="MPC prediction horizon")
     parser.add_argument("--q-diag", type=str, nargs='+', default=None, help="Diagonal elements for Q matrix (e.g., 1.0 20.0 5.0 10.0)")
     parser.add_argument("--r-val", type=float, default=None, help="Value for R matrix (scalar or diagonal if control_dim > 1)")
     parser.add_argument("--q-terminal-multiplier", type=float, default=5.0, help="Multiplier for Q to get Q_terminal (default: 5.0)")
+    parser.add_argument("--dt-controller", type=float, default=0.02, help="Timestep used for MPC internal prediction (default: 0.02)")
 
     args = parser.parse_args()
     

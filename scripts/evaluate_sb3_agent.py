@@ -36,6 +36,8 @@ from src.environments.wrappers import DiscretizeActionWrapper
 # Import registration functions explicitly
 from src.environments.swing_up_envs.pendulum_su import register_pendulum_swing_up
 from src.environments.swing_up_envs.double_pendulum_su import register_double_pendulum_swing_up
+# Import the refactored plotting function
+from src.utils.plotting import plot_diagnostics
 
 def evaluate_sb3(config, model_path, eval_episodes, run_dir):
     """Evaluate the SB3 agent deterministically."""
@@ -108,10 +110,19 @@ def evaluate_sb3(config, model_path, eval_episodes, run_dir):
         terminated = False
         truncated = False
         step = 0
+        history = [] # Initialize history list for this episode
         
         while not terminated and not truncated:
             # Use model.predict for deterministic actions
             action, _states = model.predict(obs, deterministic=True)
+            
+            # --- Store state and action BEFORE stepping --- 
+            history.append({
+                'obs': obs,
+                'action': action # Store the predicted action
+            })
+            # ----------------------------------------------
+            
             obs, reward, terminated, truncated, info = env.step(action)
             episode_reward += reward
             step += 1
@@ -120,6 +131,11 @@ def evaluate_sb3(config, model_path, eval_episodes, run_dir):
         episode_lengths.append(step)
         if i_episode % 10 == 0 or i_episode == eval_episodes:
              print(f"Evaluation Episode: {i_episode}/{eval_episodes} | Length: {step} | Reward: {episode_reward:.2f}")
+
+        # --- Plot diagnostics after the episode --- 
+        plots_dir = run_dir / "plots"
+        plot_diagnostics(history, plots_dir, episode=i_episode, plot_cost=False)
+        # ----------------------------------------
 
     env.close()
 

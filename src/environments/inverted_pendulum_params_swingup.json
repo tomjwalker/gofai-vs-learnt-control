@@ -1,0 +1,70 @@
+{
+  "cart_mass": 10.47197551196598,
+  "pole_mass": 5.018591641363306,
+  "pole_inertia_about_y": 0.1887497668730885,
+  "pole_half_length": 0.3000004166663773,
+  "pole_length": 0.6000008333327546,
+  "gravity": 9.81,
+  "state_bounds_obs": [
+    [
+      -Infinity,
+      Infinity
+    ],
+    [
+      -Infinity,
+      Infinity
+    ],
+    [
+      -Infinity,
+      Infinity
+    ],
+    [
+      -Infinity,
+      Infinity
+    ]
+  ],
+  "joint_bounds": {
+    "cart_pos": [
+      -1.0,
+      1.0
+    ],
+    "pole_angle": [
+      -10000.0,
+      10000.0
+    ]
+  },
+  "control_bounds": [
+    [
+      -3.0,
+      3.0
+    ]
+  ],
+  "actuator_gear": {
+    "slide": 100.0
+  },
+  "body_mass": [
+    0.0,
+    10.47197551196598,
+    5.018591641363306
+  ],
+  "body_inertia": [
+    [
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.12671090369478838,
+      0.12671090369478838,
+      0.04817108735504351
+    ],
+    [
+      0.1887497668730885,
+      0.1887497668730885,
+      0.0059064963098460705
+    ]
+  ],
+  "joint_damping": 1.0,
+  "slider_damping": 1.0,
+  "cart_friction": 1.0
+}

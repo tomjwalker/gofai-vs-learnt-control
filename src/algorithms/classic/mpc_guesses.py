@@ -58,7 +58,7 @@ class PendulumSwingupHeuristicGuess(MPCGuessBase):
     def get_guess(self, x0: np.ndarray, N: int, controller: 'MPCController') -> tuple[np.ndarray, np.ndarray]:
         state_dim = len(x0)
         control_dim = controller.U.shape[0]
-        dt = controller.dt
+        dt = controller.dt_controller
         
         # Basic guess for state trajectory (can be improved with simulation)
         basic_guesser = BasicGuess()
@@ -95,9 +95,28 @@ class PendulumSwingupHeuristicGuess(MPCGuessBase):
         print(f"Generated heuristic swing-up guess (U starts with {U_guess[0, 0]:.1f})")
         return X_guess, U_guess
 
+class HybridGuess(MPCGuessBase):
+    """Hybrid guess: Use heuristic when pole is down, warm start otherwise."""
+    def get_guess(self, x0: np.ndarray, N: int, controller: 'MPCController') -> tuple[np.ndarray, np.ndarray]:
+        # Threshold based on cosine of angle
+        cos_theta = np.cos(x0[1])
+        threshold = -0.7 # Corresponds to ~135 degrees from vertical
+        
+        if cos_theta <= threshold:
+            # Pole is mostly down, use heuristic
+            print(f"HybridGuess: cos(theta)={cos_theta:.2f} <= {threshold}, using Heuristic.")
+            heuristic_guesser = PendulumSwingupHeuristicGuess()
+            return heuristic_guesser.get_guess(x0, N, controller)
+        else:
+            # Pole has swung up somewhat, use warm start
+            print(f"HybridGuess: cos(theta)={cos_theta:.2f} > {threshold}, using WarmStart.")
+            warmstart_guesser = WarmStartGuess()
+            return warmstart_guesser.get_guess(x0, N, controller)
+
 # Dictionary to map guess type strings to classes
 GUESS_STRATEGY_MAP = {
     'basic': BasicGuess,
     'warmstart': WarmStartGuess,
-    'pendulum_heuristic': PendulumSwingupHeuristicGuess
+    'pendulum_heuristic': PendulumSwingupHeuristicGuess,
+    'hybrid': HybridGuess # Added hybrid strategy
 } 

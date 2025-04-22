@@ -75,7 +75,7 @@ def build_mpc_bounds(state_bounds_obs: list, control_bounds: list, N: int,
 def build_mpc_solver(
     params: Dict,
     N: int,
-    dt: float,
+    dt_controller: float,
     Q: ca.DM,
     R: ca.DM,
     Q_terminal: ca.DM,
@@ -89,7 +89,7 @@ def build_mpc_solver(
     Args:
         params: Dict of physical/environment parameters, including bounds.
         N: Prediction horizon.
-        dt: Timestep.
+        dt_controller: Timestep used for internal MPC prediction.
         Q: State weighting matrix.
         R: Control weighting matrix.
         Q_terminal: Terminal cost matrix.
@@ -152,8 +152,8 @@ def build_mpc_solver(
     for k in range(N):
         # X[:, k] is the current state
         # U[:, k] is the current control input
-        # X[:, k + 1] = pendulum_dynamics(X[:, k], U[:, k], dt, params) is the next state predicted by the dynamics
-        X_next = pendulum_dynamics(X[:, k], U[:, k], dt, params, integration_method='rk4')
+        # X[:, k + 1] = pendulum_dynamics(X[:, k], U[:, k], dt_controller, params) is the next state predicted
+        X_next = pendulum_dynamics(X[:, k], U[:, k], dt_controller, params, integration_method='rk4')
 
         # Enforce that the predicted state equals the decision variable for the next timestep
         dynamics_constraints.append(X[:, k + 1] - X_next)
@@ -221,7 +221,7 @@ class MPCController:
 
     def __init__(self,
                  N: int = 30,
-                 dt: float = 0.02,
+                 dt_controller: float = 0.02,
                  param_path: str = "src/environments/inverted_pendulum_params.json",
                  cost_type: str = 'quadratic',
                  guess_type: str = 'warmstart'):
@@ -234,13 +234,13 @@ class MPCController:
         - Stores symbolic variables and bounds
         Args:
             N (int): Prediction horizon.
-            dt (float): Timestep.
+            dt_controller (float): Timestep used for internal MPC prediction.
             param_path (str): Path to the environment parameters JSON file.
             cost_type (str): Type of cost function to use ('quadratic' or 'pendulum_swingup').
             guess_type (str): Initial guess strategy ('basic', 'warmstart', 'pendulum_heuristic').
         """
 
-        self.dt = dt
+        self.dt_controller = dt_controller
         self.cost_type = cost_type
         self.guess_type = guess_type
         self.param_path = param_path
@@ -280,9 +280,9 @@ class MPCController:
         # Define reference state (upright position)
         self.X_ref = ca.DM.zeros(4, 1)
 
-        # --- Build solver (Pass the cost calculator) --- 
+        # --- Build solver (Pass the cost calculator and controller dt) --- 
         self.solver, self.X, self.U, self.X_init, self.lbx, self.ubx = build_mpc_solver(
-            self.params, self.N, self.dt, self.Q, self.R, self.Q_terminal, self.X_ref, 
+            self.params, self.N, self.dt_controller, self.Q, self.R, self.Q_terminal, self.X_ref, 
             self.cost_calculator
         )
 
