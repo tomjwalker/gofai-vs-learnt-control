@@ -1,0 +1,224 @@
+{
+  "env_id": "InvertedDoublePendulum-v5",
+  "bodies": {
+    "world": {
+      "mass": 0.0,
+      "inertia": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "cart": {
+      "mass": 10.47197551196598,
+      "inertia": [
+        0.12671090369478838,
+        0.12671090369478838,
+        0.04817108735504351
+      ]
+    },
+    "pole": {
+      "mass": 4.1987385815227585,
+      "inertia": [
+        0.15497066975016235,
+        0.15497066975016235,
+        0.004173927853541032
+      ]
+    },
+    "pole2": {
+      "mass": 4.1987385815227585,
+      "inertia": [
+        0.15497066975016235,
+        0.15497066975016235,
+        0.004173927853541032
+      ]
+    }
+  },
+  "geoms": {
+    "floor": {
+      "size": [
+        40.0,
+        40.0,
+        40.0
+      ],
+      "type": "mjtGeom.mjGEOM_PLANE",
+      "friction": [
+        1.0,
+        0.1,
+        0.1
+      ]
+    },
+    "rail": {
+      "size": [
+        0.02,
+        1.0,
+        0.0
+      ],
+      "type": "mjtGeom.mjGEOM_CAPSULE",
+      "friction": [
+        1.0,
+        0.1,
+        0.1
+      ]
+    },
+    "cart": {
+      "size": [
+        0.1,
+        0.1,
+        0.0
+      ],
+      "type": "mjtGeom.mjGEOM_CAPSULE",
+      "friction": [
+        1.0,
+        0.1,
+        0.1
+      ]
+    },
+    "cpole": {
+      "size": [
+        0.045,
+        0.3,
+        0.0
+      ],
+      "type": "mjtGeom.mjGEOM_CAPSULE",
+      "friction": [
+        1.0,
+        0.1,
+        0.1
+      ]
+    },
+    "cpole2": {
+      "size": [
+        0.045,
+        0.3,
+        0.0
+      ],
+      "type": "mjtGeom.mjGEOM_CAPSULE",
+      "friction": [
+        1.0,
+        0.1,
+        0.1
+      ]
+    }
+  },
+  "joints": {
+    "slider": {
+      "range": [
+        -1.0,
+        1.0
+      ],
+      "damping": 0.05,
+      "qpos_address": 0,
+      "dof_address": 0,
+      "type": "mjtJoint.mjJNT_SLIDE"
+    },
+    "hinge": {
+      "range": [
+        0.0,
+        0.0
+      ],
+      "damping": 0.05,
+      "qpos_address": 1,
+      "dof_address": 1,
+      "type": "mjtJoint.mjJNT_HINGE"
+    },
+    "hinge2": {
+      "range": [
+        0.0,
+        0.0
+      ],
+      "damping": 0.05,
+      "qpos_address": 2,
+      "dof_address": 2,
+      "type": "mjtJoint.mjJNT_HINGE"
+    }
+  },
+  "actuators": {
+    "slide": {
+      "gear": 500.0,
+      "ctrl_range": [
+        -1.0,
+        1.0
+      ],
+      "joint_controlled": "slider"
+    }
+  },
+  "gravity": [
+    1e-05,
+    0.0,
+    -9.81
+  ],
+  "timestep": 0.01,
+  "gym_action_space": {
+    "low": [
+      -1.0
+    ],
+    "high": [
+      1.0
+    ]
+  },
+  "gym_observation_space": {
+    "low": [
+      "-Infinity",
+      "-Infinity",
+      "-Infinity",
+      "-Infinity",
+      "-Infinity",
+      "-Infinity",
+      "-Infinity",
+      "-Infinity",
+      "-Infinity"
+    ],
+    "high": [
+      "Infinity",
+      "Infinity",
+      "Infinity",
+      "Infinity",
+      "Infinity",
+      "Infinity",
+      "Infinity",
+      "Infinity",
+      "Infinity"
+    ]
+  },
+  "symbolic_params_mapping": {
+    "M": 10.47197551196598,
+    "m1": 4.1987385815227585,
+    "m2": 4.1987385815227585,
+    "l1": 0.6,
+    "l2": 0.6,
+    "d1": 0.3,
+    "d2": 0.3,
+    "Icm1": 0.15497066975016235,
+    "Icm2": 0.15497066975016235,
+    "g": 9.81,
+    "b_slide": 0.05,
+    "b_joint1": 0.05,
+    "b_joint2": 0.05,
+    "b_fric": 1.0,
+    "gear": 500.0,
+    "control_limits_actuator": [
+      -1.0,
+      1.0
+    ],
+    "control_limits_gym": [
+      -1.0,
+      1.0
+    ],
+    "joint_limits": {
+      "x": [
+        -1.0,
+        1.0
+      ],
+      "theta1": [
+        0.0,
+        0.0
+      ],
+      "theta2": [
+        0.0,
+        0.0
+      ]
+    },
+    "dt": 0.01
+  }
+}

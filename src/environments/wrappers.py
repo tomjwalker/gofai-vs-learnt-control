@@ -131,6 +131,84 @@ class InvertedPendulumComparisonWrapper(gym.Wrapper):
         
         return observation, reward, terminated, truncated, info 
 
+# --- Wrapper for Double Pendulum Comparison --- 
+class InvertedDoublePendulumComparisonWrapper(gym.Wrapper):
+    """
+    A wrapper for InvertedDoublePendulum-v5 for comparison.
+
+    Features:
+    - Allows setting initial state [x, th1, th2, x_d, th1_d, th2_d].
+    - Returns the 6D physical state as the observation on reset() and step().
+    - Disables the default 'terminated' condition.
+    """
+    def __init__(self, env):
+        super().__init__(env)
+        print("Initialized InvertedDoublePendulumComparisonWrapper.")
+        
+        # Store qpos/qvel sizes for convenience
+        # Need to access the unwrapped env's model
+        self.nq = self.env.unwrapped.model.nq
+        self.nv = self.env.unwrapped.model.nv
+        assert self.nq == 3, f"Expected nq=3, got {self.nq}"
+        assert self.nv == 3, f"Expected nv=3, got {self.nv}"
+
+        # Modify the observation space to reflect the 6D physical state
+        # Assuming all states are unbounded for the wrapper
+        inf = np.inf
+        obs_low = np.array([-inf] * 6, dtype=np.float64)
+        obs_high = np.array([inf] * 6, dtype=np.float64)
+        self.observation_space = gym.spaces.Box(obs_low, obs_high, dtype=np.float64)
+
+    def _get_physical_state(self):
+        """Extracts the 6D state [x, th1, th2, xd, th1d, th2d]."""
+        # Access data from the unwrapped environment
+        qpos = self.env.unwrapped.data.qpos # Shape (nq,)
+        qvel = self.env.unwrapped.data.qvel # Shape (nv,)
+        # Assuming qpos = [x, th1, th2] and qvel = [x_d, th1_d, th2_d]
+        return np.concatenate([qpos, qvel]).astype(np.float64)
+
+    def reset(self, *, seed=None, options=None, initial_state=None):
+        """
+        Resets the environment.
+        If initial_state is provided (as 6D physical state),
+        it sets the MuJoCo state accordingly.
+        Returns the 6D physical state.
+        """
+        # Call the parent reset first
+        _, info = super().reset(seed=seed, options=options)
+        
+        if initial_state is not None:
+            initial_state = np.array(initial_state, dtype=np.float64)
+            if len(initial_state) == 6:
+                qpos = initial_state[:self.nq] # First nq elements
+                qvel = initial_state[self.nq:] # Last nv elements
+                try:
+                    self.env.unwrapped.set_state(qpos, qvel)
+                    print(f"Wrapper: Set initial state: qpos={qpos}, qvel={qvel}")
+                except Exception as e:
+                    print(f"Warning: Wrapper failed to set initial state: {e}. Using default reset state.")
+            else:
+                print(f"Warning: initial_state ({len(initial_state)}D) != 6D. Using default reset state.")
+
+        # Return the physical state after reset (and potential state setting)
+        physical_state = self._get_physical_state()
+        return physical_state, info
+
+    def step(self, action):
+        """
+        Steps the environment, forces 'terminated' to False, and returns the 6D physical state.
+        """
+        _, reward, terminated, truncated, info = self.env.step(action)
+        
+        # Override termination signal
+        terminated = False 
+        
+        # Get the physical state after stepping
+        physical_state = self._get_physical_state()
+        
+        return physical_state, reward, terminated, truncated, info
+
+
 # --- Wrapper for setting initial state for swing-up --- 
 class SwingUpResetWrapper(gym.Wrapper):
     """Simple wrapper to reset the pendulum environment to the bottom state."""
