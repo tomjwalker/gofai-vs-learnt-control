@@ -224,11 +224,15 @@ class MPCController:
                  dt_controller: float = 0.02,
                  param_path: str = "src/environments/inverted_pendulum_params.json",
                  cost_type: str = 'quadratic',
-                 guess_type: str = 'warmstart'):
+                 guess_type: str = 'warmstart',
+                 # --- Add Q/R weight arguments ---
+                 q_diag: list[float] | None = None,
+                 r_val: float | None = None,
+                 q_terminal_multiplier: float = 5.0):
         """
         Initialise MPC with problem horizon, timestep, physical parameters, cost type, and guess type.
         - Loads environment parameters
-        - Defines cost matrices Q, R, Q_terminal
+        - Defines cost matrices Q, R, Q_terminal (based on provided weights or defaults)
         - Defines reference state
         - Builds solver using build_mpc_solver
         - Stores symbolic variables and bounds
@@ -238,6 +242,9 @@ class MPCController:
             param_path (str): Path to the environment parameters JSON file.
             cost_type (str): Type of cost function to use ('quadratic' or 'pendulum_swingup').
             guess_type (str): Initial guess strategy ('basic', 'warmstart', 'pendulum_heuristic').
+            q_diag (list[float] | None): Diagonal elements for the state cost matrix Q. Defaults if None.
+            r_val (float | None): Value for the control cost matrix R (scalar). Defaults if None.
+            q_terminal_multiplier (float): Multiplier for Q to get the terminal cost Q_terminal.
         """
 
         self.dt_controller = dt_controller
@@ -271,11 +278,23 @@ class MPCController:
         print(f"MPC using guess type: {guess_type}")
 
         # --- Define cost matrices (Q, R) --- 
-        # These are now weights used BY the cost calculator
-        # Default weights (can be overridden by evaluate_mpc_controller.py)
-        self.Q = ca.diag([1.0, 20.0, 5.0, 10.0])  
-        self.R = ca.DM([50.0]) 
-        self.Q_terminal = 5.0 * self.Q  
+        # Use provided weights or defaults
+        default_q_diag = [1.0, 20.0, 5.0, 10.0] # Default Q diagonal weights
+        default_r_val = 50.0                  # Default R value
+
+        current_q_diag = q_diag if q_diag is not None else default_q_diag
+        current_r_val = r_val if r_val is not None else default_r_val
+
+        # Basic validation (assuming 4 states, 1 control input)
+        if len(current_q_diag) != 4:
+            print(f"Warning: Provided q_diag length ({len(current_q_diag)}) != 4. Using default Q: {default_q_diag}")
+            current_q_diag = default_q_diag
+        
+        self.Q = ca.diag(current_q_diag)
+        self.R = ca.DM([current_r_val]) # Assuming scalar R for now
+        self.Q_terminal = q_terminal_multiplier * self.Q
+
+        print(f"MPC Cost Weights: Q_diag={current_q_diag}, R={current_r_val}, Q_term_mult={q_terminal_multiplier}")
 
         # Define reference state (upright position)
         self.X_ref = ca.DM.zeros(4, 1)
@@ -311,13 +330,17 @@ class MPCController:
 
         # === Call CasADi solver ===
         try:
+            # --- Add noise to initial state parameter for solver --- 
+            # x0_perturbed = x0.ravel() + np.random.normal(0, 0.01, x0.shape[0]) # Add small noise - REVERTED
+            # -----------------------------------------------------
             solution = self.solver(
                 x0=initial_vec, 
                 lbx=self.lbx,
                 ubx=self.ubx,
                 lbg=0, 
                 ubg=0,
-                p=x0.ravel() 
+                p=x0.ravel() # Original parameter
+                # p=x0_perturbed # Use perturbed state as parameter seed - REVERTED
             )
             
             # Simplified diagnostics after successful solve

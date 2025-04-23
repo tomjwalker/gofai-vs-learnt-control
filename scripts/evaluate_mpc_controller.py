@@ -306,41 +306,32 @@ def run_mpc_experiment(args):
     print(f"Controller dt: {dt_controller:.4f}, Env dt: {dt_env:.4f} => ZOH for {hold_steps} steps.")
 
     # --- MPC Controller Setup --- 
+    # Convert q_diag from string list to float list if provided
+    q_diag_vals = None
+    if args.q_diag:
+        try:
+            q_diag_vals = [float(x) for x in args.q_diag]
+            if len(q_diag_vals) != state_dim:
+                print(f"Warning: --q-diag length ({len(q_diag_vals)}) != state_dim ({state_dim}). Using default Q in MPCController.")
+                q_diag_vals = None # Revert to None so controller uses its default
+        except ValueError as e:
+            print(f"Warning: Invalid value in --q-diag: {e}. Using default Q in MPCController.")
+            q_diag_vals = None
+
     controller = MPCController(
         N=args.horizon,
         dt_controller=dt_controller, # Use the specified controller dt
         param_path=args.param_path,
         cost_type=args.cost_type,
-        guess_type=args.guess_type
+        guess_type=args.guess_type,
+        # Pass weights directly from args (q_diag_vals might be None)
+        q_diag=q_diag_vals, 
+        r_val=args.r_val, # Pass r_val (might be None)
+        q_terminal_multiplier=args.q_terminal_multiplier # Pass multiplier
     )
-    print(f"MPC Initialized with N={controller.N}, dt={controller.dt_controller}, CostType={controller.cost_type}, GuessType={args.guess_type}")
-
-    # Override Q and R if provided via CLI args
-    try:
-        if args.q_diag:
-             q_diag_vals = [float(x) for x in args.q_diag]
-             if len(q_diag_vals) == state_dim:
-                 controller.Q = ca.diag(q_diag_vals)
-                 controller.Q_terminal = args.q_terminal_multiplier * controller.Q 
-                 print(f"Overrode MPC Q matrix (diag): {q_diag_vals}")
-                 print(f"Set Q_terminal multiplier to: {args.q_terminal_multiplier}")
-             else:
-                 print(f"Warning: --q-diag length ({len(q_diag_vals)}) != state_dim ({state_dim}). Using default Q.")
-        # If Q wasn't overridden but multiplier was, update Q_terminal based on default Q
-        elif args.q_terminal_multiplier != 5.0: # Check if multiplier differs from default
-             controller.Q_terminal = args.q_terminal_multiplier * controller.Q 
-             print(f"Using default Q, but set Q_terminal multiplier to: {args.q_terminal_multiplier}")
-             
-        if args.r_val:
-             if control_dim == 1: # Scalar R
-                 controller.R = ca.DM([args.r_val])
-                 print(f"Overrode MPC R matrix (scalar): {args.r_val}")
-             else: # Need diagonal R if control_dim > 1
-                 r_diag = [args.r_val] * control_dim
-                 controller.R = ca.diag(r_diag)
-                 print(f"Overrode MPC R matrix (diag): {r_diag}")
-    except Exception as e:
-        print(f"Error overriding Q/R/Q_terminal matrices: {e}. Using defaults.")
+    # The Q/R weights are now set during __init__ based on args passed
+    print(f"MPC Initialized via args with: N={controller.N}, dt={controller.dt_controller}, CostType={controller.cost_type}, GuessType={args.guess_type}")
+    # Q/R values are printed within MPCController __init__
 
     # --- Run Episodes --- 
     episode_rewards = []
