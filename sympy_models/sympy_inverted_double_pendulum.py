@@ -64,7 +64,8 @@ Prerequisites:
 Configuration:
 --------------
 Several constants near the top of the script control its behavior:
-- `FILENAME`: Base name for the output `.tex` and `.pdf` files.
+- `OUTPUT_DIR`: Directory to save output files.
+- `FILENAME_BASE`: Base name for the output `.tex` and `.pdf` files.
 - `INCLUDE_UNIFORM_CASE`: Set to `True` to add a section with results assuming
   uniform rods (substitutes d1=l1/2, d2=l2/2).
 - `COMPILE_PDF`: Set to `True` to attempt PDF compilation using `pdflatex`.
@@ -75,10 +76,12 @@ Several constants near the top of the script control its behavior:
 
 Usage:
 ------
-Run the script from the command line:
+Run the script from the project root directory using the `-m` flag:
 ```bash
-python <script_name>.py
+python -m sympy_models.sympy_inverted_double_pendulum
 ```
+This ensures that Python's module resolution works correctly for the imports
+within the script and its utilities.
 
 """
 
@@ -90,8 +93,21 @@ sp.init_printing(use_unicode=True, use_latex='mathjax')
 from pylatex import Document, Section, Subsection, Command, Package
 from pylatex.utils import NoEscape, bold
 from pylatex.base_classes import Environment
-from pylatex.math import Math, Matrix as PyLatexMatrix
+from pylatex.math import Math
 from pylatex.section import Paragraph
+
+# Import helpers from the new utils module
+from sympy_models.utils.sympy_to_latex import (
+    format_vector_name,
+    sympy_to_latex,
+    sympy_to_multiline_latex,
+    add_multiline_eq,
+    add_sympy_eq_rhs,
+    add_sympy_matrix_eq_rhs,
+    add_shorthand_definitions,
+    add_mass_matrix_elements,
+    add_cse_definitions
+)
 
 import subprocess
 import os
@@ -99,10 +115,14 @@ import platform
 import shutil
 
 # --- Step 0: Configuration ---
-FILENAME = 'double_pendulum_lagrangian_derivation_v2'
+OUTPUT_DIR = 'sympy_models'  # Save outputs in this directory
+FILENAME_BASE = 'double_pendulum_lagrangian_derivation_v2'
 INCLUDE_UNIFORM_CASE = True
 COMPILE_PDF = True
 CLEAN_TEX = True
+
+# Construct full paths
+output_path_base = os.path.join(OUTPUT_DIR, FILENAME_BASE)
 
 print("--- Running SymPy Calculations (v2) ---")
 
@@ -112,7 +132,13 @@ t = sp.symbols('t')
 M, m1, m2, l1, l2, d1, d2, Icm1, Icm2, g, U = sp.symbols(
     'M m1 m2 l1 l2 d1 d2 Icm1 Icm2 g U', real=True
 )
-params = [M, m1, m2, l1, l2, d1, d2, Icm1, Icm2, g, U]
+# Add symbols for damping, friction, gear ratio
+b_slide, b_fric, b_joint1, b_joint2, gear = sp.symbols(
+    'b_slide b_fric b_joint1 b_joint2 gear', real=True, positive=True # Assume positive
+)
+
+params = [M, m1, m2, l1, l2, d1, d2, Icm1, Icm2, g, U, 
+          b_slide, b_fric, b_joint1, b_joint2, gear] # Add new params
 
 # Generalized coords
 x = sp.Function('x')(t)
@@ -161,7 +187,13 @@ V = m1*g*r_cm1[1] + m2*g*r_cm2[1]
 L = T - V
 
 # 6. Euler-Lagrange
-Q_gen = sp.Matrix([U, 0, 0])
+# Define generalized forces including control, damping, and friction
+Q_gen = sp.Matrix([
+    gear*U - b_slide*x_d - b_fric*x_d, # Force on cart
+    -b_joint1*th1_d,                   # Torque on joint 1
+    -b_joint2*th2_d                    # Torque on joint 2
+])
+
 Eqs_LHS_vec = sp.zeros(len(q), 1)
 
 # Store intermediate calculations for each coordinate
@@ -199,14 +231,23 @@ C_G_vec = Eqs_LHS_vec.subs(subs_dict)
 rhs_vector = Q_gen - C_G_vec
 C_G_vec = sp.simplify(C_G_vec)
 rhs_vector = sp.simplify(rhs_vector)
+
+# Apply CSE to the RHS vector before solving
+rhs_cse_defs, rhs_reduced_vector = sp.cse(rhs_vector)
+
+# Note: Solving with the CSE'd vector might be slightly different
+# Let's solve first, then apply CSE to the result for display
 accel_eqs_vec = sp.simplify(M_matrix.LUsolve(rhs_vector))
+
+# Apply CSE to the final acceleration equations for cleaner LaTeX output
+accel_cse_defs, accel_reduced_vec = sp.cse(accel_eqs_vec)
 
 print("Symbolic calculations complete.")
 
 # --- Step 8: Generate LaTeX Document ---
-print(f"\n--- Generating LaTeX Document ({FILENAME}.tex) ---")
+print(f"\n--- Generating LaTeX Document ({output_path_base}.tex) ---")
 geometry_options = {"tmargin": "2cm", "lmargin": "2cm", "rmargin":"2cm", "bmargin":"2cm"}
-doc = Document(FILENAME, geometry_options=geometry_options)
+doc = Document(output_path_base, geometry_options=geometry_options)
 
 # We want amsmath + extra packages for nicer matrices:
 doc.packages.append(Package('amsmath'))       # Already there, but re-assert
@@ -214,197 +255,6 @@ doc.packages.append(Package('amssymb'))       # NEW
 doc.packages.append(Package('amsfonts'))      # NEW
 doc.packages.append(Package('bm'))            # Possibly for bold math if wanted
 doc.packages.append(Package('graphicx'))
-
-def format_vector_name(name):
-    """Helper to format vector names consistently"""
-    return NoEscape(r'\mathbf{' + name + r'}')
-
-def sympy_to_latex(expr, use_dot_notation=False):
-    """ Convert SymPy expression to bigger, parenthesised LaTeX matrix. """
-    # Configure SymPy's latex printer for better vector/matrix output
-    latex_str = sp.latex(expr, mode='inline', mat_str='matrix', mat_delim='')
-    # Insert \displaystyle:
-    latex_str = r'\displaystyle ' + latex_str
-
-    # Dot notation replacements
-    if use_dot_notation:
-       latex_str = latex_str.replace(r'\frac{d}{d t} x{\left(t \right)}', r'\dot{x}')
-       latex_str = latex_str.replace(r'\frac{d}{d t} \theta_{1}{\left(t \right)}', r'\dot{\theta}_{1}')
-       latex_str = latex_str.replace(r'\frac{d}{d t} \theta_{2}{\left(t \right)}', r'\dot{\theta}_{2}')
-       latex_str = latex_str.replace(r'\frac{d^{2}}{d t^{2}} x{\left(t \right)}', r'\ddot{x}')
-       latex_str = latex_str.replace(r'\frac{d^{2}}{d t^{2}} \theta_{1}{\left(t \right)}', r'\ddot{\theta}_{1}')
-       latex_str = latex_str.replace(r'\frac{d^{2}}{d t^{2}} \theta_{2}{\left(t \right)}', r'\ddot{\theta}_{2}')
-
-    # Shorthand replacements for cleaner equations
-    replacements = [
-        # Remove explicit time dependencies
-        (r'x{\left(t \right)}', 'x'),
-        (r'\theta_{1}{\left(t \right)}', r'\theta_1'),
-        (r'\theta_{2}{\left(t \right)}', r'\theta_2'),
-        # Shorthands for trig functions
-        (r'\cos{\left(\theta_{1} \right)}', r'c_1'),
-        (r'\cos{\left(\theta_{2} \right)}', r'c_2'),
-        (r'\sin{\left(\theta_{1} \right)}', r's_1'),
-        (r'\sin{\left(\theta_{2} \right)}', r's_2'),
-        # Clean up any leftover {\left and \right} artifacts
-        (r'{\left(', r'('),
-        (r'\right)}', r')'),
-    ]
-    
-    for old, new in replacements:
-        latex_str = latex_str.replace(old, new)
-
-    # Handle matrices and vectors more robustly
-    if isinstance(expr, sp.Matrix):
-        # Remove any \left[ and \right] that SymPy might have added
-        latex_str = latex_str.replace(r'\left[', '')
-        latex_str = latex_str.replace(r'\right]', '')
-        
-        if expr.shape[1] == 1:  # Column vector
-            latex_str = latex_str.replace(r'\begin{matrix}', r'\begin{pmatrix}')
-            latex_str = latex_str.replace(r'\end{matrix}', r'\end{pmatrix}')
-        else:  # Regular matrix
-            latex_str = latex_str.replace(r'\begin{matrix}', r'\begin{bmatrix}')
-            latex_str = latex_str.replace(r'\end{matrix}', r'\end{bmatrix}')
-
-    # Remove HTML tags
-    for remove_tag in (r'<span class="math-inline">', r'</span>', r'<span class="math-block">'):
-        latex_str = latex_str.replace(remove_tag, '')
-
-    # Remove any stray dollar signs
-    latex_str = latex_str.replace('$', '')
-
-    return latex_str
-
-def sympy_to_multiline_latex(expr, use_dot_notation=False, line_length=55):
-    """
-    Convert SymPy expression to LaTeX with automatic line breaks for long expressions.
-    Uses aligned environment to ensure proper alignment.
-    """
-    # Get the basic LaTeX string first
-    latex_str = sympy_to_latex(expr, use_dot_notation)
-    
-    # If it's short enough, return as is
-    if len(latex_str) <= line_length:
-        return latex_str
-    
-    # Find good break points (+ and - operators at the top level)
-    # and additional break points at multiplication and other operations
-    parts = []
-    current_part = ""
-    paren_level = 0
-    
-    # Define additional break characters
-    primary_break_chars = ['+', '-']
-    secondary_break_chars = ['\\cdot', '\\sin', '\\cos', '=']
-    
-    i = 0
-    while i < len(latex_str):
-        # Track parentheses level
-        if latex_str[i] in ['(', '[', '{']:
-            paren_level += 1
-        elif latex_str[i] in [')', ']', '}']:
-            paren_level -= 1
-        
-        # Check for primary break points (+ and - not in exponents or subscripts)
-        if paren_level == 0 and i > 0 and latex_str[i] in primary_break_chars and latex_str[i-1] != '^' and latex_str[i-1] != '_':
-            parts.append(current_part)
-            current_part = latex_str[i]  # Start new part with the operator
-            i += 1
-            continue
-            
-        # Check for secondary break points (functions like sin, cos, etc.)
-        found_secondary = False
-        if paren_level == 0 and len(current_part) > line_length // 2:
-            for break_str in secondary_break_chars:
-                if i + len(break_str) <= len(latex_str) and latex_str[i:i+len(break_str)] == break_str:
-                    parts.append(current_part)
-                    current_part = ""
-                    found_secondary = True
-                    break
-        
-        if not found_secondary:
-            current_part += latex_str[i]
-            i += 1
-            
-        # Force break if current part gets too long
-        if len(current_part) > line_length and paren_level == 0:
-            parts.append(current_part)
-            current_part = ""
-            
-    # Add the last part
-    if current_part:
-        parts.append(current_part)
-    
-    # Generate the multiline output with proper alignment
-    result = r'\begin{aligned} '
-    
-    # First line doesn't need indentation
-    result += parts[0] + r' \\' + '\n'
-    
-    # Remaining lines
-    for part in parts[1:]:
-        result += r'& ' + part + r' \\' + '\n'
-    
-    # Close the environment
-    result = result.rstrip('\n').rstrip('\\\\') + r' '
-    result += r'\end{aligned}'
-    
-    return result
-
-def add_multiline_eq(doc_obj, lhs_str, sympy_expr, label_str, use_dot=False):
-    """
-    Add a potentially long equation with proper line breaking
-    """
-    env = Environment()
-    env._latex_name = 'align*'
-    lhs_latex = lhs_str
-    rhs_latex = sympy_to_multiline_latex(sympy_expr, use_dot_notation=use_dot)
-    env.append(NoEscape(lhs_latex + r' &= ' + rhs_latex + r' \\'))
-    doc_obj.append(env)
-
-def add_sympy_eq_rhs(doc_obj, lhs_str, sympy_rhs_expr, label_str, use_dot=False):
-    """
-    Add an equation with align* environment, no HTML.
-    """
-    lhs_latex = lhs_str
-    rhs_latex = sympy_to_latex(sympy_rhs_expr, use_dot_notation=use_dot)
-
-    # Use align* environment directly
-    env = Environment()
-    env._latex_name = 'align*'
-    env.append(NoEscape(lhs_latex + r' &= ' + rhs_latex + r' \\'))
-    doc_obj.append(env)
-
-def add_sympy_matrix_eq_rhs(doc_obj, lhs_str, sympy_matrix, label_str):
-    """Same as above but for matrix eq: lhs = matrix."""
-    matrix_latex = sympy_to_latex(sympy_matrix)
-    
-    # Use align* environment directly
-    env = Environment()
-    env._latex_name = 'align*'
-    env.append(NoEscape(lhs_str + r' &= ' + matrix_latex + r' \\'))
-    doc_obj.append(env)
-
-def add_shorthand_definitions(doc):
-    """Add definitions of our shorthands at the start of the document"""
-    doc.append(NoEscape(r'\begin{align*}'))
-    doc.append(NoEscape(r'&\text{Where: } \\'))
-    doc.append(NoEscape(r'&c_1 = \cos(\theta_1), \quad s_1 = \sin(\theta_1) \\'))
-    doc.append(NoEscape(r'&c_2 = \cos(\theta_2), \quad s_2 = \sin(\theta_2)'))
-    doc.append(NoEscape(r'\end{align*}'))
-    doc.append(NoEscape(r'\vspace{1em}'))  # Add some vertical space
-
-def add_mass_matrix_elements(doc_obj, M):
-    """Add mass matrix elements one by one with clear labeling"""
-    doc.append(NoEscape(r'\begin{align*}'))
-    for i in range(M.shape[0]):
-        for j in range(M.shape[1]):
-            element = sp.simplify(M[i,j])
-            if element != 0:  # Only show non-zero elements
-                doc.append(NoEscape(f"M_{{{i+1}{j+1}}} &= {sp.latex(element)} \\\\"))
-    doc.append(NoEscape(r'\end{align*}'))
-    doc.append(NoEscape(r'\vspace{1em}'))  # Add some vertical space
 
 # Title, etc.
 doc.preamble.append(Command('title', 'Lagrangian Derivation of Double Inverted Pendulum Dynamics (v2)'))
@@ -498,17 +348,24 @@ with doc.create(Section('7. Solving for Accelerations')):
     doc.append(Paragraph(bold('Mass Matrix M(q) elements:')))
     add_mass_matrix_elements(doc, M_matrix)
     
-    doc.append(Paragraph(bold(r'Calculated RHS Vector $\tau - (C\dot{q}+G)$:')))
-    add_sympy_matrix_eq_rhs(doc, r"\tau - (C\dot{q}+G)", rhs_vector, "rhs_vector")
+    doc.append(Paragraph(bold(r'Calculated RHS Vector $\tau - (C\dot{q}+G)$: (Simplified using CSE)')))
+    # Add CSE definitions for RHS vector
+    add_cse_definitions(doc, rhs_cse_defs)
+    # Add the simplified RHS vector using the reduced expression
+    add_sympy_matrix_eq_rhs(doc, r"\tau - (C\dot{q}+G)", rhs_reduced_vector[0], "rhs_vector_cse") # CSE returns list
 
 with doc.create(Section('8. Equations of Motion (Accelerations)')):
-    doc.append('Final expressions for the accelerations are:')
+    doc.append('Final expressions for the accelerations are (Simplified using CSE):')
+    # Add CSE definitions for acceleration equations
+    add_cse_definitions(doc, accel_cse_defs)
+    
+    # Use the reduced expressions from CSE for the final equations
     with doc.create(Subsection('Acceleration of the cart')):
-        add_sympy_eq_rhs(doc, r"\ddot{x}", accel_eqs_vec[0], "x_ddot", use_dot=True)
+        add_sympy_eq_rhs(doc, r"\ddot{x}", accel_reduced_vec[0][0], "x_ddot_cse", use_dot=True)
     with doc.create(Subsection('Angular Acceleration of Rod 1')):
-        add_sympy_eq_rhs(doc, r"\ddot{\theta}_1", accel_eqs_vec[1], "th1_ddot", use_dot=True)
+        add_sympy_eq_rhs(doc, r"\ddot{\theta}_1", accel_reduced_vec[0][1], "th1_ddot_cse", use_dot=True)
     with doc.create(Subsection('Angular Acceleration of Rod 2')):
-        add_sympy_eq_rhs(doc, r"\ddot{\theta}_2", accel_eqs_vec[2], "th2_ddot", use_dot=True)
+        add_sympy_eq_rhs(doc, r"\ddot{\theta}_2", accel_reduced_vec[0][2], "th2_ddot_cse", use_dot=True)
 
 if INCLUDE_UNIFORM_CASE:
     try:
@@ -522,17 +379,23 @@ if INCLUDE_UNIFORM_CASE:
             rhs_vector_uniform = sp.simplify(rhs_vector.subs(uniform_rod_subs))
             accel_eqs_vec_uniform = sp.simplify(M_matrix_uniform.LUsolve(rhs_vector_uniform))
 
+            # Apply CSE to uniform case accelerations as well
+            uni_accel_cse_defs, uni_accel_reduced_vec = sp.cse(accel_eqs_vec_uniform)
+
             doc.append(Paragraph(bold('Mass Matrix M(q) (Uniform Rods):')))
             add_sympy_matrix_eq_rhs(doc, "M_{uniform}(q)", M_matrix_uniform, "mass_matrix_uniform")
-            doc.append(Paragraph(bold('Accelerations (Uniform Rods):')))
-            add_sympy_eq_rhs(doc, r"\ddot{x}", accel_eqs_vec_uniform[0], "x_ddot_uniform", use_dot=True)
-            add_sympy_eq_rhs(doc, r"\ddot{\theta}_1", accel_eqs_vec_uniform[1], "th1_ddot_uniform", use_dot=True)
-            add_sympy_eq_rhs(doc, r"\ddot{\theta}_2", accel_eqs_vec_uniform[2], "th2_ddot_uniform", use_dot=True)
+            doc.append(Paragraph(bold('Accelerations (Uniform Rods): (Simplified using CSE)')))
+            # Add CSE definitions for uniform case
+            add_cse_definitions(doc, uni_accel_cse_defs)
+            # Use reduced expressions
+            add_sympy_eq_rhs(doc, r"\ddot{x}", uni_accel_reduced_vec[0][0], "x_ddot_uniform_cse", use_dot=True)
+            add_sympy_eq_rhs(doc, r"\ddot{\theta}_1", uni_accel_reduced_vec[0][1], "th1_ddot_uniform_cse", use_dot=True)
+            add_sympy_eq_rhs(doc, r"\ddot{\theta}_2", uni_accel_reduced_vec[0][2], "th2_ddot_uniform_cse", use_dot=True)
     except Exception as e:
         doc.append(Paragraph(bold('Error during uniform rod substitution.')))
         print(e)
 
-print(f"\n--- Generating PDF ({FILENAME}.pdf) ---")
+print(f"\n--- Generating PDF ({output_path_base}.pdf) ---")
 compiler = 'pdflatex'
 if not shutil.which(compiler):
     print(f"ERROR: '{compiler}' not found.")
@@ -540,11 +403,11 @@ if not shutil.which(compiler):
 
 if COMPILE_PDF:
     try:
-        doc.generate_pdf(FILENAME, clean_tex=CLEAN_TEX, compiler=compiler, compiler_args=['-interaction=nonstopmode'])
-        pdf_path = f"{FILENAME}.pdf"
+        doc.generate_pdf(output_path_base, clean_tex=CLEAN_TEX, compiler=compiler, compiler_args=['-interaction=nonstopmode'])
+        pdf_path = f"{output_path_base}.pdf"
         if os.path.exists(pdf_path):
-            doc.generate_pdf(FILENAME, clean_tex=CLEAN_TEX, compiler=compiler, compiler_args=['-interaction=nonstopmode'])
-            print(f"Successfully generated {FILENAME}.pdf")
+            doc.generate_pdf(output_path_base, clean_tex=CLEAN_TEX, compiler=compiler, compiler_args=['-interaction=nonstopmode'])
+            print(f"Successfully generated {pdf_path}")
             if os.path.exists(pdf_path):
                 try:
                     if platform.system() == "Windows":
@@ -559,9 +422,9 @@ if COMPILE_PDF:
             print(f"{pdf_path} not found. Check log.")
     except Exception as e:
         print(f"Error generating PDF: {e}")
-        print(f"Check the .log file or {FILENAME}.tex")
+        print(f"Check the .log file or {output_path_base}.tex")
 else:
-    doc.generate_tex(FILENAME)
-    print(f"Generated {FILENAME}.tex only.")
+    doc.generate_tex(output_path_base)
+    print(f"Generated {output_path_base}.tex only.")
 
 print("\n--- Script Finished ---")
