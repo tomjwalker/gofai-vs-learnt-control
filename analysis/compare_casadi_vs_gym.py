@@ -16,7 +16,7 @@ if project_root not in sys.path:
 # Import necessary functions/classes from the project
 from src.utils.parameters import load_inverted_pendulum_params
 from src.environments.wrappers import InvertedPendulumComparisonWrapper
-from src.environments.casadi_dynamics import pendulum_dynamics # Import the dynamics function
+from src.environments.pendulum_dynamics import pendulum_dynamics # Import the dynamics function
 
 
 print("Running CasADi and Gym dynamics simulation and comparison...")
@@ -24,7 +24,7 @@ print("Running CasADi and Gym dynamics simulation and comparison...")
 # --- Configuration ---
 ENV_ID = "InvertedPendulum-v5"
 # Use paths relative to project root
-PARAM_PATH = "src/environments/inverted_pendulum_params.json" 
+PARAM_PATH = "src/environments/pendulum_params.json" 
 SIM_STEPS = 2500  # Reduced steps for faster visualization (e.g., 100 seconds if dt=0.04)
 CASADI_INITIAL_STATE = np.array([0.0, 0.1, 0.0, 0.0]) 
 CONTROL_INPUT = np.array([0.0]) 
