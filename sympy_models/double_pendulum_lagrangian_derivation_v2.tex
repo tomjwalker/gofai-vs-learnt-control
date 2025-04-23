@@ -30,7 +30,7 @@ This document details the derivation of equations of motion for a double inverte
 
 %
 \[%
-\displaystyle \left[ M, \  m_{1}, \  m_{2}, \  l_{1}, \  l_{2}, \  d_{1}, \  d_{2}, \  Icm_{1}, \  Icm_{2}, \  g, \  U\right]%
+\displaystyle \left[ M, \  m_{1}, \  m_{2}, \  l_{1}, \  l_{2}, \  d_{1}, \  d_{2}, \  Icm_{1}, \  Icm_{2}, \  g, \  U, \  b_{slide}, \  b_{fric}, \  b_{joint1}, \  b_{joint2}, \  gear\right]%
 \]%
 \paragraph{Generalized coordinates (functions of time t):}%
 \label{para:Generalizedcoordinates(functionsoftimet)}%
@@ -274,36 +274,68 @@ M_{22} &= 1.0 Icm_{1} \\%
 M_{33} &= 1.0 Icm_{2} \\%
 \end{align*}%
 \vspace{1em}%
-\paragraph{\textbf{Calculated RHS Vector \$\textbackslash{}tau {-} (C\textbackslash{}dot\{q\}+G)\$:}}%
-\label{para:textbfCalculatedRHSVectortextbackslashtau{-}(Ctextbackslashdotq+G)}%
+\paragraph{\textbf{Calculated RHS Vector \$\textbackslash{}tau {-} (C\textbackslash{}dot\{q\}+G)\$: (Simplified using CSE)}}%
+\label{para:textbfCalculatedRHSVectortextbackslashtau{-}(Ctextbackslashdotq+G)(SimplifiedusingCSE)}%
 
 %
+\textbf{Common Subexpressions:}\\ \vspace{0.5em}%
 \begin{align*}%
-\tau - (C\dot{q}+G) &= \displaystyle \begin{matrix}1.0 U + 1.0 d_{1} m_{1} \sin(\theta_1 ) \left(\frac{d}{d t} \theta_1\right)^{2} + 1.0 d_{2} m_{2} \sin(\theta_2 ) \left(\frac{d}{d t} \theta_2\right)^{2} + 1.0 l_{1} m_{2} \sin(\theta_1 ) \left(\frac{d}{d t} \theta_1\right)^{2}\\1.0 d_{1} g m_{1} \sin(\theta_1 ) - 1.0 d_{2} l_{1} m_{2} \sin(\theta_1 - \theta_2 ) \left(\frac{d}{d t} \theta_2\right)^{2} + 1.0 g l_{1} m_{2} \sin(\theta_1 )\\1.0 d_{2} m_{2} \left(g \sin(\theta_2 ) + l_{1} \sin(\theta_1 - \theta_2 ) \left(\frac{d}{d t} \theta_1\right)^{2}\right)\end{matrix} \\%
+x_{0} &= \displaystyle 1.0 \dot{x} \\%
+x_{1} &= \displaystyle \theta_1 \\%
+x_{2} &= \displaystyle \frac{d}{d t} x_{1} \\%
+x_{3} &= \displaystyle x_{2}^{2} \\%
+x_{4} &= \displaystyle \sin(x_{1} ) \\%
+x_{5} &= \displaystyle 1.0 x_{3} x_{4} \\%
+x_{6} &= \displaystyle \theta_2 \\%
+x_{7} &= \displaystyle \frac{d}{d t} x_{6} \\%
+x_{8} &= \displaystyle x_{7}^{2} \\%
+x_{9} &= \displaystyle 1.0 d_{2} m_{2} \\%
+x_{10} &= \displaystyle x_{9} \sin(x_{6} ) \\%
+x_{11} &= \displaystyle l_{1} x_{9} \sin(x_{1} - x_{6} ) \\%
+\end{align*}%
+\vspace{1em}%
+\begin{align*}%
+\tau - (C\dot{q}+G) &= \displaystyle \begin{matrix}1.0 U gear - b_{fric} x_{0} - b_{slide} x_{0} + d_{1} m_{1} x_{5} + l_{1} m_{2} x_{5} + x_{10} x_{8}\\- 1.0 b_{joint1} x_{2} + 1.0 d_{1} g m_{1} x_{4} + 1.0 g l_{1} m_{2} x_{4} - x_{11} x_{8}\\- 1.0 b_{joint2} x_{7} + g x_{10} + x_{11} x_{3}\end{matrix} \\%
 \end{align*}
 
 %
 \section{8. Equations of Motion (Accelerations)}%
 \label{sec:8.EquationsofMotion(Accelerations)}%
-Final expressions for the accelerations are:%
+Final expressions for the accelerations are (Simplified using CSE):%
+\textbf{Common Subexpressions:}\\ \vspace{0.5em}%
+\begin{align*}%
+x_{0} &= \displaystyle \dot{x} \\%
+x_{1} &= \displaystyle \theta_1 \\%
+x_{2} &= \displaystyle \frac{d}{d t} x_{1} \\%
+x_{3} &= \displaystyle x_{2}^{2} \\%
+x_{4} &= \displaystyle \sin(x_{1} ) \\%
+x_{5} &= \displaystyle x_{3} x_{4} \\%
+x_{6} &= \displaystyle \theta_2 \\%
+x_{7} &= \displaystyle \frac{d}{d t} x_{6} \\%
+x_{8} &= \displaystyle x_{7}^{2} \\%
+x_{9} &= \displaystyle d_{2} m_{2} \\%
+x_{10} &= \displaystyle x_{9} \sin(x_{6} ) \\%
+x_{11} &= \displaystyle l_{1} x_{9} \sin(x_{1} - x_{6} ) \\%
+\end{align*}%
+\vspace{1em}%
 \subsection{Acceleration of the cart}%
 \label{subsec:Accelerationofthecart}%
 \begin{align*}%
-\ddot{x} &= \displaystyle 1.0 \left(U + d_{1} m_{1} \sin(\theta_1 ) \left(\dot{\theta}_{1}\right)^{2} + d_{2} m_{2} \sin(\theta_2 ) \left(\dot{\theta}_{2}\right)^{2} + l_{1} m_{2} \sin(\theta_1 ) \left(\dot{\theta}_{1}\right)^{2}\right) / M \\%
+\ddot{x} &= \displaystyle 1.0 \left(U gear - b_{fric} x_{0} - b_{slide} x_{0} + d_{1} m_{1} x_{5} + l_{1} m_{2} x_{5} + x_{10} x_{8}\right) / M \\%
 \end{align*}
 
 %
 \subsection{Angular Acceleration of Rod 1}%
 \label{subsec:AngularAccelerationofRod1}%
 \begin{align*}%
-\ddot{\theta}_1 &= \displaystyle 1.0 \left(d_{1} g m_{1} \sin(\theta_1 ) - d_{2} l_{1} m_{2} \sin(\theta_1 - \theta_2 ) \left(\dot{\theta}_{2}\right)^{2} + g l_{1} m_{2} \sin(\theta_1 )\right) / Icm_{1} \\%
+\ddot{\theta}_1 &= \displaystyle 1.0 \left(- b_{joint1} x_{2} + d_{1} g m_{1} x_{4} + g l_{1} m_{2} x_{4} - x_{11} x_{8}\right) / Icm_{1} \\%
 \end{align*}
 
 %
 \subsection{Angular Acceleration of Rod 2}%
 \label{subsec:AngularAccelerationofRod2}%
 \begin{align*}%
-\ddot{\theta}_2 &= \displaystyle 1.0 d_{2} m_{2} \left(g \sin(\theta_2 ) + l_{1} \sin(\theta_1 - \theta_2 ) \left(\dot{\theta}_{1}\right)^{2}\right) / Icm_{2} \\%
+\ddot{\theta}_2 &= \displaystyle 1.0 \left(- b_{joint2} x_{7} + g x_{10} + x_{11} x_{3}\right) / Icm_{2} \\%
 \end{align*}
 
 %
@@ -317,18 +349,34 @@ Substituting uniform rods: \$d\_1 = l\_1/2, d\_2 = l\_2/2\$.%
 \begin{align*}%
 M_{uniform}(q) &= \displaystyle \begin{matrix}1.0 M & 0 & 0\\0 & 1.0 Icm_{1} & 0\\0 & 0 & 1.0 Icm_{2}\end{matrix} \\%
 \end{align*}%
-\paragraph{\textbf{Accelerations (Uniform Rods):}}%
-\label{para:textbfAccelerations(UniformRods)}%
+\paragraph{\textbf{Accelerations (Uniform Rods): (Simplified using CSE)}}%
+\label{para:textbfAccelerations(UniformRods)(SimplifiedusingCSE)}%
 
 %
+\textbf{Common Subexpressions:}\\ \vspace{0.5em}%
 \begin{align*}%
-\ddot{x} &= \displaystyle \left(1.0 U + 0.5 l_{1} m_{1} \sin(\theta_1 ) \left(\dot{\theta}_{1}\right)^{2} + 1.0 l_{1} m_{2} \sin(\theta_1 ) \left(\dot{\theta}_{1}\right)^{2} + 0.5 l_{2} m_{2} \sin(\theta_2 ) \left(\dot{\theta}_{2}\right)^{2}\right) / M \\%
+x_{0} &= \displaystyle 1.0 \dot{x} \\%
+x_{1} &= \displaystyle \theta_1 \\%
+x_{2} &= \displaystyle \frac{d}{d t} x_{1} \\%
+x_{3} &= \displaystyle x_{2}^{2} \\%
+x_{4} &= \displaystyle \sin(x_{1} ) \\%
+x_{5} &= \displaystyle l_{1} x_{3} x_{4} \\%
+x_{6} &= \displaystyle \theta_2 \\%
+x_{7} &= \displaystyle \frac{d}{d t} x_{6} \\%
+x_{8} &= \displaystyle x_{7}^{2} \\%
+x_{9} &= \displaystyle 0.5 l_{2} m_{2} \\%
+x_{10} &= \displaystyle x_{9} \sin(x_{6} ) \\%
+x_{11} &= \displaystyle l_{1} x_{9} \sin(x_{1} - x_{6} ) \\%
+\end{align*}%
+\vspace{1em}%
+\begin{align*}%
+\ddot{x} &= \displaystyle \left(1.0 U gear - b_{fric} x_{0} - b_{slide} x_{0} + 0.5 m_{1} x_{5} + 1.0 m_{2} x_{5} + x_{10} x_{8}\right) / M \\%
 \end{align*}%
 \begin{align*}%
-\ddot{\theta}_1 &= \displaystyle 1.0 l_{1} \left(0.5 g m_{1} \sin(\theta_1 ) + 1.0 g m_{2} \sin(\theta_1 ) - 0.5 l_{2} m_{2} \sin(\theta_1 - \theta_2 ) \left(\dot{\theta}_{2}\right)^{2}\right) / Icm_{1} \\%
+\ddot{\theta}_1 &= \displaystyle \left(- 1.0 b_{joint1} x_{2} + 0.5 g l_{1} m_{1} x_{4} + 1.0 g l_{1} m_{2} x_{4} - x_{11} x_{8}\right) / Icm_{1} \\%
 \end{align*}%
 \begin{align*}%
-\ddot{\theta}_2 &= \displaystyle 0.5 l_{2} m_{2} \left(g \sin(\theta_2 ) + l_{1} \sin(\theta_1 - \theta_2 ) \left(\dot{\theta}_{1}\right)^{2}\right) / Icm_{2} \\%
+\ddot{\theta}_2 &= \displaystyle \left(- 1.0 b_{joint2} x_{7} + g x_{10} + x_{11} x_{3}\right) / Icm_{2} \\%
 \end{align*}
 
 %

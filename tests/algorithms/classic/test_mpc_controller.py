@@ -3,6 +3,7 @@ import numpy as np
 import casadi as ca
 import os
 import sys # Import sys
+from pathlib import Path
 
 # Ensure the working directory is the project root when running tests
 # This allows consistent relative path access (e.g., to param files)
@@ -13,13 +14,18 @@ if PROJECT_ROOT not in sys.path:
 
 os.chdir(PROJECT_ROOT)
 
+# Add project root to path
+project_root = str(Path(__file__).parent.parent.parent.parent)
+sys.path.append(project_root)
+
 from src.algorithms.classic.mpc_controller import MPCController
+from src.utils.parameters import load_inverted_pendulum_params # Adjusted function name assumed
 
 # Default parameters for testing
 DEFAULT_N = 10 # Shorter horizon for faster tests
 DEFAULT_DT = 0.02
 # Use the actual parameter file - ensure it exists and is valid
-DEFAULT_PARAM_PATH = "src/environments/inverted_pendulum_params.json"
+DEFAULT_PARAM_PATH = "src/environments/pendulum_params.json"
 
 @pytest.fixture
 def mpc_controller():

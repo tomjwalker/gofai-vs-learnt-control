@@ -484,19 +484,19 @@ if __name__ == "__main__":
         "InvertedPendulum-v5": {
             "cost": "quadratic", 
             "guess": "warmstart", 
-            "params": "src/environments/inverted_pendulum_params.json"
+            "params": "src/environments/pendulum_params.json"
         },
         "Pendulum-SwingUp": { # This key is now just for reference, logic below uses the unlimited one
             "cost": "pendulum_atan2", 
             "guess": "pendulum_heuristic",
-            "params": "src/environments/inverted_pendulum_params_swingup.json" 
+            "params": "src/environments/pendulum_params_swingup.json" 
         },
         # Add entry for the unlimited version which will actually be used by default logic now
         "Pendulum-SwingUpUnlimited-v0": {
             "cost": "pendulum_atan2", 
             "guess": "pendulum_heuristic",
             # Assumes you generated this file using --unlimit-pole!
-            "params": "src/environments/inverted_pendulum_params_swingup.json" 
+            "params": "src/environments/pendulum_params_swingup.json" 
         },
         # Add entries for DoublePendulum tasks later
     }
@@ -525,7 +525,7 @@ if __name__ == "__main__":
         print(f"Warning: Env '{args.env_id}' not in DEFAULT_CONFIGS map.")
         if args.cost_type is None: args.cost_type = "quadratic"
         if args.guess_type is None: args.guess_type = "warmstart"
-        if args.param_path is None: args.param_path = "src/environments/inverted_pendulum_params.json"
+        if args.param_path is None: args.param_path = "src/environments/pendulum_params.json"
         print(f"Using fallback defaults: cost='{args.cost_type}', guess='{args.guess_type}', params='{args.param_path}'.")
             
     # --- Proceed with Experiment --- 

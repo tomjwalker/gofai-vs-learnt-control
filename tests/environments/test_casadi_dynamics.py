@@ -4,12 +4,16 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import casadi as ca
+import pytest
+from src.utils.parameters import load_pendulum_params
+from src.environments.pendulum_dynamics import pendulum_dynamics
 
 # Add the project root to the Python path
 project_root = str(Path(__file__).parent.parent.parent)
 sys.path.append(project_root)
 
-from src.environments.casadi_dynamics import pendulum_dynamics
+# Define the path to the parameters file (assuming it's accessible)
+PARAM_PATH = "src/environments/pendulum_params.json"
 
 def simulate_pendulum(initial_theta=0.1, dt=0.01, duration=5.0):
     """

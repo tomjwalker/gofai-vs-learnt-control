@@ -29,8 +29,8 @@
       1.0
     ],
     "pole_angle": [
-      -10000.0,
-      10000.0
+      -1.5707963267948966,
+      1.5707963267948966
     ]
   },
   "control_bounds": [
@@ -67,4 +67,4 @@
   "joint_damping": 1.0,
   "slider_damping": 1.0,
   "cart_friction": 1.0
-}
+} 

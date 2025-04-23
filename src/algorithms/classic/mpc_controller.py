@@ -7,9 +7,9 @@ import numpy as np
 from typing import Tuple, Dict
 from pathlib import Path
 
-from src.utils.parameters import load_inverted_pendulum_params
+from src.utils.parameters import load_pendulum_params
 from src.utils.mpc_helpers import build_mpc_bounds
-from src.environments.casadi_dynamics import pendulum_dynamics
+from src.environments.pendulum_dynamics import pendulum_dynamics
 # Import the cost functions
 from src.algorithms.classic.mpc_costs import COST_FUNCTION_MAP, MPCCostBase 
 # Import the guess strategies
@@ -222,7 +222,7 @@ class MPCController:
     def __init__(self,
                  N: int = 30,
                  dt_controller: float = 0.02,
-                 param_path: str = "src/environments/inverted_pendulum_params.json",
+                 param_path: str = "src/environments/pendulum_params.json",
                  cost_type: str = 'quadratic',
                  guess_type: str = 'warmstart',
                  # --- Add Q/R weight arguments ---
@@ -256,7 +256,7 @@ class MPCController:
         # Load environment parameters
         if not Path(self.param_path).exists():
             raise FileNotFoundError(f"Parameter file not found at: {self.param_path}")
-        self.params = load_inverted_pendulum_params(self.param_path)
+        self.params = load_pendulum_params(self.param_path)
 
         # Set instance variables
         self.N = N

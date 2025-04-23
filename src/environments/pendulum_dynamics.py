@@ -1,4 +1,4 @@
-# casadi_dynamics.py
+# pendulum_dynamics.py
 import casadi as ca
 from typing import Dict, Any
 
@@ -124,4 +124,4 @@ def pendulum_dynamics(x: ca.SX, u: ca.SX, dt: float, params: Dict[str, Any],
     else:
         raise ValueError(f"Unknown integration method: {integration_method}")
 
-    return x_next
+    return x_next 

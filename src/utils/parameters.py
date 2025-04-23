@@ -1,7 +1,8 @@
 import json
+import numpy as np
 
 
-def load_inverted_pendulum_params(json_file="inverted_pendulum_params.json"):
+def load_pendulum_params(json_file="pendulum_params.json"):
     """
     Loads the environment parameters for the InvertedPendulum
     that were previously saved to JSON.
@@ -30,5 +31,13 @@ def load_inverted_pendulum_params(json_file="inverted_pendulum_params.json"):
 
 if __name__ == "__main__":
     # Example usage / test
-    ip_params = load_inverted_pendulum_params("inverted_pendulum_params.json")
-    # You can now use ip_params['cart_mass'], ip_params['pole_mass'], etc.
+    # Assuming the script is run from the project root or parameters.py location
+    # Try loading the default file first
+    try:
+        # Update path
+        ip_params = load_pendulum_params("src/environments/pendulum_params.json")
+        print("Default Pendulum Parameters:")
+        for key, value in ip_params.items():
+            print(f"  {key}: {value}")
+    except FileNotFoundError:
+        print("Default Pendulum Parameters file not found. Please check the path.")
