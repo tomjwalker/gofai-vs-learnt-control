@@ -56,7 +56,124 @@ import gymnasium as gym
 import numpy as np
 import time
 from gymnasium.envs.registration import register
+from pathlib import Path
+from gymnasium.envs.mujoco.inverted_pendulum import InvertedPendulumEnv
+from gymnasium.envs.mujoco.mujoco_env import MujocoEnv
+from gymnasium import utils
+import os
 
+# Define path to custom XML near the top of the file
+# Assumes this script is in src/environments/swing_up_envs
+current_dir = Path(__file__).parent # Now assumes XML is in the same directory
+CUSTOM_XML_PATH = current_dir / "inverted_pendulum_swingup.xml" # Updated path
+
+# --- Custom Env Class using Unlimited XML ---
+class InvertedPendulumUnlimitedEnv(MujocoEnv, utils.EzPickle):
+    """ Subclass of MujocoEnv that directly loads the custom swingup XML. """
+    metadata = {
+        "render_modes": [
+            "human",
+            "rgb_array",
+            "depth_array",
+        ],
+        "render_fps": 25, # 1/0.04
+    }
+    
+    def __init__(self, **kwargs):
+        utils.EzPickle.__init__(self, **kwargs)
+        # Define observation space (copied from standard InvertedPendulumEnv)
+        observation_space = gym.spaces.Box(
+            low=-np.inf, high=np.inf, shape=(4,), dtype=np.float64
+        )
+        # Calculate and print absolute path
+        absolute_xml_path = os.path.abspath(CUSTOM_XML_PATH)
+        print(f"--- DEBUG: Initializing MujocoEnv with absolute_model_path: {absolute_xml_path} ---")
+        # Call the MUJOCO base class constructor directly
+        MujocoEnv.__init__(
+            self,
+            model_path=absolute_xml_path,
+            frame_skip=2, # Standard frame skip for InvertedPendulum
+            observation_space=observation_space,
+            **kwargs
+        )
+        
+        # --- Post-Initialization Model Modification --- 
+        # Workaround for model_path loading issues: Modify the loaded model directly.
+        try:
+            hinge_idx = self.model.joint('hinge').id # Get ID by name
+            if hinge_idx >= 0:
+                 # Apply desired unlimited range
+                 self.model.jnt_range[hinge_idx] = [-10000.0, 10000.0] 
+                 # Ensure joint is marked as not limited
+                 self.model.jnt_limited[hinge_idx] = 0 # 0 means false
+                 print(f"--- Post-init MODIFIED hinge joint (idx {hinge_idx}) range to: {self.model.jnt_range[hinge_idx]}, limited: {self.model.jnt_limited[hinge_idx]} ---")
+            else:
+                 print("--- Post-init WARNING: Could not find hinge joint by name to modify. ---")
+        except Exception as e:
+            print(f"--- Post-init WARNING: Error modifying hinge joint: {e} ---")
+        # ----------------------------------------------
+        
+        # --- Extract bounds immediately after modification ---
+        self.extracted_joint_bounds = {} # Store on instance
+        if hasattr(self.model, 'jnt_range') and hasattr(self.model, 'jnt_qposadr'):
+            for i in range(self.model.njnt):
+                jnt_name = self.model.joint(i).name
+                qpos_adr = self.model.jnt_qposadr[i]
+                low, high = self.model.jnt_range[i]
+                state_name = None
+                if jnt_name == 'slider': state_name = 'cart_pos'
+                elif jnt_name == 'hinge': state_name = 'pole_angle'
+                if state_name:
+                    self.extracted_joint_bounds[state_name] = [float(low), float(high)]
+                else:
+                    self.extracted_joint_bounds[f"{jnt_name}_qpos{qpos_adr}"] = [float(low), float(high)]
+            print(f"--- Post-init EXTRACTED bounds: {self.extracted_joint_bounds} ---")
+        else:
+            print("--- Post-init WARNING: Could not extract joint ranges immediately. ---")
+        # --------------------------------------------------
+        
+    def step(self, action):
+        # Standard step logic, but reward/termination is handled by the wrapper
+        self.do_simulation(action, self.frame_skip)
+        observation = self._get_obs()
+        # In this base class, reward and terminated are simple
+        reward = 1.0 # Base reward (will be overwritten by wrapper)
+        terminated = False # Base termination (will be overwritten by wrapper)
+        info = {}
+        if self.render_mode == "human":
+            self.render()
+        # The PendulumSwingUp wrapper will modify reward and termination
+        return observation, reward, terminated, False, info # Return truncated=False always
+
+    def _get_obs(self):
+        # Standard observation: qpos[1], qvel
+        # Need to ensure correct order [cart_pos, pole_angle, cart_vel, pole_ang_vel]
+        qpos = self.data.qpos
+        qvel = self.data.qvel
+        # MuJoCo state: [cart_pos, pole_angle] -> [qpos[0], qpos[1]]
+        # Observation:   [cart_pos, pole_angle, cart_vel, pole_ang_vel]
+        return np.concatenate((qpos, qvel)).ravel() # This seems wrong, should match space
+        # Correction: Standard observation is just velocities + pole pos sin/cos
+        # Let's match the standard InvertedPendulum-v5 obs directly
+        # return np.concatenate([qpos[1:], np.clip(qvel, -10, 10)]).ravel()
+        # return np.concatenate([self.data.qpos, np.clip(self.data.qvel, -10, 10)]).ravel()
+        # Actually, v5 uses: position + velocity
+        # return np.concatenate((self.data.qpos, self.data.qvel)).ravel()
+        # Final check based on standard implementation:
+        return np.concatenate((qpos, qvel)).ravel()
+        
+    def reset_model(self):
+        # Standard reset logic (randomizes slightly near top)
+        qpos = self.init_qpos + self.np_random.uniform(
+            size=self.model.nq, low=-0.01, high=0.01
+        )
+        qvel = self.init_qvel + self.np_random.uniform(
+            size=self.model.nv, low=-0.01, high=0.01
+        )
+        self.set_state(qpos, qvel)
+        # The PendulumSwingUp wrapper will override this initial state
+        return self._get_obs()
+# -------------------------------------------
 
 class PendulumSwingUp(gym.Wrapper): # Renamed class
     """
@@ -236,9 +353,11 @@ class PendulumSwingUp(gym.Wrapper): # Renamed class
 
 # Create the factory function
 def make_env(render_mode=None, debug=False, camera_config=None, 
-             reward_mode='cos_theta', center_penalty_weight=0.1, limit_penalty=10.0):
+             reward_mode='cos_theta', center_penalty_weight=0.1, limit_penalty=10.0,
+             use_unlimited_xml=False): # Added flag
     """
     Factory function to create the PendulumSwingUp environment.
+    Can optionally load a custom XML with wider joint limits.
     
     Args:
         render_mode (str, optional): The render mode for the base environment.
@@ -247,18 +366,27 @@ def make_env(render_mode=None, debug=False, camera_config=None,
         reward_mode (str): The reward calculation mode ('cos_theta' or 'cos_theta_centered').
         center_penalty_weight (float): Weight for the cart centering penalty.
         limit_penalty (float): Penalty for hitting the cart position limits.
+        use_unlimited_xml (bool): If True, load from custom XML file.
 
     Returns:
         PendulumSwingUp: The wrapped environment instance.
     """
-    # Creates the base InvertedPendulum environment, passing camera_config
     # Only pass camera_config if render_mode is also set, as it's MuJoCo specific
     env_kwargs = {'render_mode': render_mode}
     if render_mode is not None and camera_config is not None:
-        # Use the correct argument name for the base MuJoCo env
         env_kwargs['default_camera_config'] = camera_config 
         
-    base_env = gym.make('InvertedPendulum-v5', **env_kwargs)
+    if use_unlimited_xml:
+        # Load base env from custom XML
+        print(f"Using custom XML for swing-up: {CUSTOM_XML_PATH}")
+        if not CUSTOM_XML_PATH.exists():
+            raise FileNotFoundError(f"Custom XML not found at: {CUSTOM_XML_PATH}")
+        base_env = InvertedPendulumUnlimitedEnv(**env_kwargs)
+    else:
+        # Load standard base env
+        print("Using standard InvertedPendulum-v5 for swing-up.")
+        base_env = gym.make('InvertedPendulum-v5', **env_kwargs)
+        
     # Wraps it with our swing-up modifications
     return PendulumSwingUp(base_env, debug=debug, 
                          reward_mode=reward_mode, 
@@ -267,13 +395,17 @@ def make_env(render_mode=None, debug=False, camera_config=None,
 
 # Function to perform registration
 def register_pendulum_swing_up():
-    """Registers the Pendulum-SwingUp environment."""
-    if 'Pendulum-SwingUp' not in gym.envs.registry:
+    """Registers Pendulum-SwingUp environments (standard and unlimited)."""
+    # Standard version (for DRL compatibility)
+    std_id = 'Pendulum-SwingUp-v0'
+    if std_id not in gym.envs.registry:
+        print(f"Registering standard swing-up: {std_id}")
         register(
-            id='Pendulum-SwingUp', # Renamed ID
-            entry_point='src.environments.swing_up_envs.pendulum_su:make_env', # Use full path
-            max_episode_steps=500, # Standard truncation length
-            kwargs={ # Default arguments for the factory function
+            id=std_id,
+            entry_point='src.environments.swing_up_envs.pendulum_su:make_env',
+            max_episode_steps=500,
+            kwargs={ # Explicitly set use_unlimited_xml=False (or rely on default)
+                'use_unlimited_xml': False,
                 'reward_mode': 'cos_theta',
                 'center_penalty_weight': 0.1,
                 'limit_penalty': 10.0,
@@ -281,8 +413,24 @@ def register_pendulum_swing_up():
                 'camera_config': None
             } 
         )
-        # print("Registered Pendulum-SwingUp") # Optional debug
-    # else: print("Pendulum-SwingUp already registered") # Optional debug
+
+    # Unlimited version (for MPC)
+    unlimited_id = 'Pendulum-SwingUpUnlimited-v0'
+    if unlimited_id not in gym.envs.registry:
+        print(f"Registering unlimited swing-up: {unlimited_id}")
+        register(
+            id=unlimited_id,
+            entry_point='src.environments.swing_up_envs.pendulum_su:make_env',
+            max_episode_steps=1000, # Allow longer runs for MPC if needed
+            kwargs={ 
+                'use_unlimited_xml': True, # Use the custom XML!
+                'reward_mode': 'cos_theta', # Keep other defaults consistent for now
+                'center_penalty_weight': 0.1,
+                'limit_penalty': 10.0,
+                'debug': False,
+                'camera_config': None
+            } 
+        )
 
 # Initial registration when module is imported (for non-subprocess use)
 # register_pendulum_swing_up()

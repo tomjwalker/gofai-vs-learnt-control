@@ -5,10 +5,15 @@
 import casadi as ca
 import numpy as np
 from typing import Tuple, Dict
+from pathlib import Path
 
 from src.utils.parameters import load_inverted_pendulum_params
 from src.utils.mpc_helpers import build_mpc_bounds
 from src.environments.casadi_dynamics import pendulum_dynamics
+# Import the cost functions
+from src.algorithms.classic.mpc_costs import COST_FUNCTION_MAP, MPCCostBase 
+# Import the guess strategies
+from src.algorithms.classic.mpc_guesses import GUESS_STRATEGY_MAP, MPCGuessBase
 
 # TODO: remove hardcoded path
 # Set working directory to the root of the project, without any relative path logic
@@ -70,23 +75,27 @@ def build_mpc_bounds(state_bounds_obs: list, control_bounds: list, N: int,
 def build_mpc_solver(
     params: Dict,
     N: int,
-    dt: float,
+    dt_controller: float,
     Q: ca.DM,
     R: ca.DM,
     Q_terminal: ca.DM,
-    X_ref: ca.DM
+    X_ref: ca.DM,
+    cost_calculator: 'MPCCostBase'
 ) -> Tuple[ca.Function, ca.SX, ca.SX, ca.SX, list, list]:
     """
     Build an MPC solver for the inverted pendulum environment.
+    Uses a provided cost calculator object for cost definition.
 
     Args:
         params: Dict of physical/environment parameters, including bounds.
         N: Prediction horizon.
-        dt: Timestep.
+        dt_controller: Timestep used for internal MPC prediction.
         Q: State weighting matrix.
         R: Control weighting matrix.
         Q_terminal: Terminal cost matrix.
         X_ref: Reference state to track.
+        cost_calculator: An object with calculate_stage_cost and 
+                         calculate_terminal_cost methods.
 
     Returns:
         Tuple containing:
@@ -106,22 +115,25 @@ def build_mpc_solver(
     U = ca.SX.sym("U", 1, N)  # control trajectory. 1 control input: horizontal force on the cart. Over N timesteps as
     # only apply control at each timestep.
 
-    # === Define MPC cost function ===
-
-    # Initialize cost
+    # === Define MPC cost function (Using cost_calculator) ===
     cost = 0
-    # Loop over each timestep in the prediction horizon and accumulate the cost
     for k in range(N):
-        # Error between the predicted state and the reference state
-        state_error = X[:, k] - X_ref
-        control = U[:, k]
-        # Calculate timestep cost
-        timestep_cost = ca.mtimes([state_error.T, Q, state_error]) + ca.mtimes([control.T, R, control])
-        # Accumulate cost
-        cost += timestep_cost
-    # Add terminal cost
-    terminal_error = X[:, N] - X_ref
-    terminal_cost = ca.mtimes([terminal_error.T, Q_terminal, terminal_error])
+        # Calculate stage cost using the provided calculator
+        stage_cost = cost_calculator.calculate_stage_cost(
+            Xk=X[:, k], 
+            Uk=U[:, k], 
+            Xref=X_ref, 
+            Q=Q, 
+            R=R
+        )
+        cost += stage_cost
+    
+    # Add terminal cost using the provided calculator
+    terminal_cost = cost_calculator.calculate_terminal_cost(
+        XN=X[:, N], 
+        Xref=X_ref, 
+        Q_terminal=Q_terminal
+    )
     cost += terminal_cost
 
     # === Define MPC constraints ===
@@ -140,8 +152,8 @@ def build_mpc_solver(
     for k in range(N):
         # X[:, k] is the current state
         # U[:, k] is the current control input
-        # X[:, k + 1] = pendulum_dynamics(X[:, k], U[:, k], dt, params) is the next state predicted by the dynamics
-        X_next = pendulum_dynamics(X[:, k], U[:, k], dt, params, integration_method='rk4')
+        # X[:, k + 1] = pendulum_dynamics(X[:, k], U[:, k], dt_controller, params) is the next state predicted
+        X_next = pendulum_dynamics(X[:, k], U[:, k], dt_controller, params, integration_method='rk4')
 
         # Enforce that the predicted state equals the decision variable for the next timestep
         dynamics_constraints.append(X[:, k + 1] - X_next)
@@ -209,137 +221,126 @@ class MPCController:
 
     def __init__(self,
                  N: int = 30,
-                 dt: float = 0.02,
-                 param_path: str = "src/environments/inverted_pendulum_params.json"):
+                 dt_controller: float = 0.02,
+                 param_path: str = "src/environments/inverted_pendulum_params.json",
+                 cost_type: str = 'quadratic',
+                 guess_type: str = 'warmstart',
+                 # --- Add Q/R weight arguments ---
+                 q_diag: list[float] | None = None,
+                 r_val: float | None = None,
+                 q_terminal_multiplier: float = 5.0):
         """
-        Initialise MPC with problem horizon, timestep, and physical parameters.
+        Initialise MPC with problem horizon, timestep, physical parameters, cost type, and guess type.
         - Loads environment parameters
-        - Defines cost matrices Q, R, Q_terminal
+        - Defines cost matrices Q, R, Q_terminal (based on provided weights or defaults)
         - Defines reference state
         - Builds solver using build_mpc_solver
         - Stores symbolic variables and bounds
+        Args:
+            N (int): Prediction horizon.
+            dt_controller (float): Timestep used for internal MPC prediction.
+            param_path (str): Path to the environment parameters JSON file.
+            cost_type (str): Type of cost function to use ('quadratic' or 'pendulum_swingup').
+            guess_type (str): Initial guess strategy ('basic', 'warmstart', 'pendulum_heuristic').
+            q_diag (list[float] | None): Diagonal elements for the state cost matrix Q. Defaults if None.
+            r_val (float | None): Value for the control cost matrix R (scalar). Defaults if None.
+            q_terminal_multiplier (float): Multiplier for Q to get the terminal cost Q_terminal.
         """
 
-        # Load parameters
-        self.params = load_inverted_pendulum_params(param_path)
+        self.dt_controller = dt_controller
+        self.cost_type = cost_type
+        self.guess_type = guess_type
+        self.param_path = param_path
+        print(f"MPC Initializing with param_path: {self.param_path}") # Added for debugging
+
+        # Load environment parameters
+        if not Path(self.param_path).exists():
+            raise FileNotFoundError(f"Parameter file not found at: {self.param_path}")
+        self.params = load_inverted_pendulum_params(self.param_path)
 
         # Set instance variables
         self.N = N
-        self.dt = dt
+        self.cost_type = cost_type
+        self.guess_type = guess_type
 
-        # Define cost matrices
-        # Reduced state weights, increased velocity weights slightly
-        self.Q = ca.diag([1.0, 20.0, 5.0, 10.0])  
-        # Significantly increased control weight
-        self.R = ca.DM([50.0]) 
-        # Keep terminal cost proportional to Q
-        self.Q_terminal = 5.0 * self.Q  
+        # --- Instantiate the appropriate cost calculator --- 
+        CostCalculatorClass = COST_FUNCTION_MAP.get(cost_type)
+        if CostCalculatorClass is None:
+            raise ValueError(f"Unknown cost_type: '{cost_type}'. Available types: {list(COST_FUNCTION_MAP.keys())}")
+        self.cost_calculator: MPCCostBase = CostCalculatorClass()
+        print(f"MPC using cost type: {cost_type}")
+
+        # --- Instantiate the appropriate guess strategy --- 
+        GuessStrategyClass = GUESS_STRATEGY_MAP.get(guess_type)
+        if GuessStrategyClass is None:
+             raise ValueError(f"Unknown guess_type: '{guess_type}'. Available types: {list(GUESS_STRATEGY_MAP.keys())}")
+        self.guess_strategy: MPCGuessBase = GuessStrategyClass()
+        print(f"MPC using guess type: {guess_type}")
+
+        # --- Define cost matrices (Q, R) --- 
+        # Use provided weights or defaults
+        default_q_diag = [1.0, 20.0, 5.0, 10.0] # Default Q diagonal weights
+        default_r_val = 50.0                  # Default R value
+
+        current_q_diag = q_diag if q_diag is not None else default_q_diag
+        current_r_val = r_val if r_val is not None else default_r_val
+
+        # Basic validation (assuming 4 states, 1 control input)
+        if len(current_q_diag) != 4:
+            print(f"Warning: Provided q_diag length ({len(current_q_diag)}) != 4. Using default Q: {default_q_diag}")
+            current_q_diag = default_q_diag
+        
+        self.Q = ca.diag(current_q_diag)
+        self.R = ca.DM([current_r_val]) # Assuming scalar R for now
+        self.Q_terminal = q_terminal_multiplier * self.Q
+
+        print(f"MPC Cost Weights: Q_diag={current_q_diag}, R={current_r_val}, Q_term_mult={q_terminal_multiplier}")
 
         # Define reference state (upright position)
         self.X_ref = ca.DM.zeros(4, 1)
 
-        # Build solver
+        # --- Build solver (Pass the cost calculator and controller dt) --- 
         self.solver, self.X, self.U, self.X_init, self.lbx, self.ubx = build_mpc_solver(
-            self.params, self.N, self.dt, self.Q, self.R, self.Q_terminal, self.X_ref
+            self.params, self.N, self.dt_controller, self.Q, self.R, self.Q_terminal, self.X_ref, 
+            self.cost_calculator
         )
 
-        # Attributes to store X_prev and U_prev, which can be used to warm-start the next timestep's MPC initial guess
-        self.X_prev = None    # Initialise to None - this can then be used as a test for whether it is first timestep
+        # Attributes for warm-starting
+        self.X_prev = None 
         self.U_prev = None
 
-    def get_guesses_basic(self, x0: np.ndarray) -> np.ndarray:
-        """
-        Helper function for `solve`. On each real timestep, we pass initial guesses X_guess and U_guess to the
-        CasADi solver to help localise it in the search space to ensure it finds a feasible solution.
-
-        Basic version:
-        - X_guess is a repeat of the x0 vector (assume system doesn't move from x0), of shape [len(x0), N+1]
-        - U_guess is all zeros (0 control input), of shape [1, N]
-        """
-
-        # X_guess has shape [len(X), N+1]
-        # n.b. it is worth first getting x0 into a columnar vector shape with .reshape(-1, 1)
-        x0 = x0.reshape(-1, 1)
-        # n.b. np.tile(vector, (1, num_repeats)) repeats `vector` column-wise
-        X_guess = np.tile(x0, (1, (self.N + 1)))
-
-        # For the control vector, the initial guess is no control - 0s for all degrees of freedom
-        U_guess = np.zeros((1, self.N))
-
-        return X_guess, U_guess
-
-    def get_guesses_warmstart(self, x0: np.ndarray) -> np.ndarray:
-        """
-        Helper function for `solve`. On each real timestep, we pass initial guesses X_guess and U_guess to the
-        CasADi solver to help localise it in the search space to ensure it finds a feasible solution.
-
-        Warm-start version:
-        1. X_guess is the output of the previous real timestep's MPC solver output shifted 1 to the left
-        a. X_guess(:, 0) = x0 - we have the actual state at this timestep, so no need to guess current state
-        b. Then, have X_guess(:,k) ← X_prev(:,k+1) for k=1,…,N
-        c. The final X_guess(:,N+1) can then be a repeat of the penultimate guess X_guess(⋅,N)
-        2. U_guess follows similar logic from U_prev, except that we can use U_prev even for U_guess[:, 0]
-        """
-
-        # Use self.X_prev and self.U_prev
-
-        # Warm start guess for X
-        X_guess = np.zeros_like(self.X_prev)  # shape (4, N+1)
-        X_guess[:, :-1] = self.X_prev[:, 1:]  # Shift everything left
-        X_guess[:, -1] = self.X_prev[:, -1]  # Replicate last column
-        # override X[:, 0] with x0
-        X_guess[:, 0] = x0
-
-        # Warm start guess for U
-        U_guess = np.zeros_like(self.U_prev)  # shape (1, N)
-        U_guess[:, :-1] = self.U_prev[:, 1:]  # Shift everything left
-        U_guess[:, -1] = self.U_prev[:, -1]  # Replicate last column
-
-        return X_guess, U_guess
-
-    def get_guesses(self, x0: np.ndarray):
-
-        # If no previous X, U available (e.g. self.X_prev is None), do basic guessing
-        if self.X_prev is None:
-            X_guess, U_guess = self.get_guesses_basic(x0)
-        # Else do warm-start
-        else:
-            X_guess, U_guess = self.get_guesses_warmstart(x0)
-
-        return X_guess, U_guess
-
-    def solve(self, x0: np.ndarray) -> np.ndarray:
+    def solve(self, x0: np.ndarray) -> dict:
         """
         Solve the MPC problem given initial state x0.
+        Uses the configured guess_strategy.
 
         Args:
             x0 (np.ndarray): Current state, shape (4,)
 
         Returns:
-            np.ndarray: Optimal control sequence, shape (1, N)
-
-        TODO:
-        - Construct initial guess [x]
-        - Prepare constraint RHS
-        - Call CasADi solver
-        - Extract U from solver output
+            dict: Solver output dictionary including solution, cost, status etc.
         """
 
-        # === Construct initial guess ===
-        X_guess, U_guess = self.get_guesses(x0)
+        # === Construct initial guess using the strategy ===
+        X_guess, U_guess = self.guess_strategy.get_guess(x0=x0, N=self.N, controller=self)
+        
         initial_x_vec = X_guess.T.flatten()
         initial_u_vec = U_guess.T.flatten()
         initial_vec = np.concatenate([initial_x_vec, initial_u_vec])
 
         # === Call CasADi solver ===
         try:
+            # --- Add noise to initial state parameter for solver --- 
+            # x0_perturbed = x0.ravel() + np.random.normal(0, 0.01, x0.shape[0]) # Add small noise - REVERTED
+            # -----------------------------------------------------
             solution = self.solver(
                 x0=initial_vec, 
                 lbx=self.lbx,
                 ubx=self.ubx,
                 lbg=0, 
                 ubg=0,
-                p=x0.ravel() 
+                p=x0.ravel() # Original parameter
+                # p=x0_perturbed # Use perturbed state as parameter seed - REVERTED
             )
             
             # Simplified diagnostics after successful solve
@@ -347,8 +348,51 @@ class MPCController:
             constraint_violation = float(np.max(np.abs(solution['g']))) if "g" in solution else np.nan
             print(f"  MPC Solve: Cost={cost:.2f}, ConstrViol={constraint_violation:.2e}", end='') # Print on one line
 
+            # Check if solution dictionary and essential keys exist
+            if solution is not None and 'x' in solution and 'f' in solution:
+                print(f"Solver stats: {self.solver.stats()}")
+                print(f"Solver return_status: {self.solver.stats().get('return_status', 'N/A')}")
+                print(f"Solver success: {self.solver.stats().get('success', 'N/A')}")
+                
+                print(f"Solver objective function value (cost): {solution['f']}")
+                # Try extracting solution variables safely
+                try:
+                    sol_x_values = solution['x']
+                    # Unpack solution
+                    # Shape is (nx + nu) * N + nx = (4+1)*30+4 = 154 typically
+                    # print(f"Raw solver solution vector (sol['x']) shape: {sol_x_values.shape}")
+                    # Extract state trajectory (X_sol) and control trajectory (U_sol)
+                    X_sol_flat = sol_x_values[0 : 4 * (self.N + 1)]
+                    U_sol_flat = sol_x_values[4 * (self.N + 1) :]
+                    X_sol = ca.reshape(X_sol_flat, 4, self.N + 1)
+                    U_sol = ca.reshape(U_sol_flat, 1, self.N)
+                    print(f"  X_sol shape: {X_sol.shape}, U_sol shape: {U_sol.shape}")
+                    print(f"  X_sol (first 5):\n{X_sol[:, :min(5, self.N+1)]}")
+                    print(f"  U_sol (first 5):\n{U_sol[:, :min(5, self.N)]}")
+                except Exception as e:
+                    print(f"  Error extracting X_sol/U_sol from solver solution: {e}")
+                    X_sol = None # Indicate failure
+                    U_sol = None
+            else:
+                print("Solver did not return a valid solution dictionary ('x' or 'f' key missing).")
+                X_sol = None
+                U_sol = None
+
+            # Extract the first control action even if the full solution is dubious,
+            # but only if U_sol was successfully extracted
+            if U_sol is not None and U_sol.shape[1] > 0:
+                u_next = U_sol[:, 0].full().flatten()[0] # Get the first control action
+            else:
+                print("  Could not extract U_sol, defaulting u_next to 0.")
+                u_next = 0.0 # Default to zero if solution extraction failed
+                
+            # Calculate cost and constraint violation from solution if possible
+            cost_val = solution['f'].full().item() if solution is not None and 'f' in solution else float('inf')
+            constr_viol = np.linalg.norm(solution['g'].full()) if solution is not None and 'g' in solution else float('inf')
+            print(f"  Calculated u_next: {u_next:.4f}, Cost: {cost_val:.4f}, ConstrViol: {constr_viol:.4e}")
+
         except Exception as e:
-            print(f"\nMPC Solver failed: {e}")
+            print(f"\n!!! Exception during solver call !!!")
             # Return a default safe action (e.g., zero) or re-raise
             # For now, return a dictionary indicating failure
             return {
@@ -380,8 +424,8 @@ class MPCController:
             "X_solution": X_solution,
             "U_solution": U_solution,
             "u_next": u_next,
-            "cost": cost,
-            "constraint_violation": constraint_violation,
+            "cost": cost_val,
+            "constraint_violation": constr_viol,
             "solver_status": self.solver.stats().get('return_status', 'unknown')
         }
 

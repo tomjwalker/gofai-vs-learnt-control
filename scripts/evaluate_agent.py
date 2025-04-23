@@ -25,8 +25,10 @@ if project_root not in sys.path:
 
 # Imports from project
 from src.algorithms.learnt.dqn_controller import DQNController
+from src.environments.swing_up_envs.pendulum_su import register_pendulum_swing_up # Explicit import
+register_pendulum_swing_up() # Call registration function early
 from src.environments.wrappers import DiscretizeActionWrapper
-import src.environments.swing_up_envs # To register custom envs
+from src.utils.plotting import plot_diagnostics
 
 def evaluate(config, model_state_dict, eval_episodes, run_dir):
     """Evaluate the agent with a deterministic policy."""
@@ -121,16 +123,31 @@ def evaluate(config, model_state_dict, eval_episodes, run_dir):
         episode_reward = 0
         terminated = False
         truncated = False
+        history = [] # Initialize history list for this episode
 
         while not terminated and not truncated:
             # Select action greedily using eval_mode=True
             action = agent.select_action(state, eval_mode=True)
+            
+            # --- Store state and action BEFORE stepping --- 
+            # Use the state *before* the step and the action *taken*
+            history.append({
+                'obs': state,
+                'action': action 
+            })
+            # ----------------------------------------------
+            
             state, reward, terminated, truncated, info = env.step(action)
             episode_reward += reward
 
         episode_rewards.append(episode_reward)
         if i_episode % 10 == 0 or i_episode == eval_episodes:
              print(f"Evaluation Episode: {i_episode}/{eval_episodes} | Reward: {episode_reward:.2f}")
+             
+        # --- Plot diagnostics after the episode --- 
+        plots_dir = run_dir / "plots"
+        plot_diagnostics(history, plots_dir, episode=i_episode, plot_cost=False)
+        # ----------------------------------------
 
     env.close()
 
@@ -177,7 +194,7 @@ if __name__ == "__main__":
     run_dir = None
 
     if args.run_id:
-        run_dir = Path("runs") / args.run_id
+        run_dir = Path("runs") / "DRL" / args.run_id
         if not run_dir.is_dir():
             print(f"Error: Run directory not found: {run_dir}")
             sys.exit(1)
@@ -218,12 +235,24 @@ if __name__ == "__main__":
     # Add record_video flag to config
     loaded_config['record_video'] = args.record_video 
 
+    # --- Handle Legacy Env ID --- 
+    if loaded_config.get('env_id') == 'Pendulum-SwingUp':
+        print("Warning: Found legacy env ID 'Pendulum-SwingUp'. Using 'Pendulum-SwingUp-v0' instead.")
+        loaded_config['env_id'] = 'Pendulum-SwingUp-v0'
+
     # --- Determine Action Dimension from Config --- 
     # Necessary for agent init before loading state_dict
     # Attempt to find original action_dim if saved, otherwise infer based on discretisation
     if 'action_dim' not in loaded_config: 
         print("Warning: 'action_dim' not found in config. Inferring...")
-        temp_env = gym.make(loaded_config.get('env_id', args.env_id or 'InvertedPendulum-v5')) # Use default if missing
+        # --- Explicitly apply legacy fix here too ---
+        env_id_for_inference = loaded_config.get('env_id', args.env_id or 'InvertedPendulum-v5')
+        if env_id_for_inference == 'Pendulum-SwingUp':
+             env_id_for_inference = 'Pendulum-SwingUp-v0' # Apply fix
+             print(f"Applying legacy fix inside action_dim inference: using {env_id_for_inference}")
+        # -----------------------------------------------
+        print(f"--- DEBUG: Attempting gym.make with env_id: {env_id_for_inference} for action_dim inference ---") # DEBUG
+        temp_env = gym.make(env_id_for_inference) # Use default if missing
         if loaded_config.get('n_discrete_actions') and isinstance(temp_env.action_space, gym.spaces.Box):
              loaded_config['action_dim'] = loaded_config['n_discrete_actions']
         elif isinstance(temp_env.action_space, gym.spaces.Discrete):
@@ -257,8 +286,13 @@ if __name__ == "__main__":
     }
     for key in required_keys:
          if key not in loaded_config:
-            print(f"Warning: '{key}' not found in config. Using default value: {defaults[key]}")
-            loaded_config[key] = defaults[key]
+            # Check if the key exists as an argument override first
+            if hasattr(args, key) and getattr(args, key) is not None:
+                print(f"Using command-line override for '{key}': {getattr(args, key)}")
+                loaded_config[key] = getattr(args, key)
+            else:
+                print(f"Warning: '{key}' not found in config. Using default value: {defaults[key]}")
+                loaded_config[key] = defaults[key]
 
     # Load model state dict
     # Ensure model is loaded to the correct device (CPU for simplicity here)
