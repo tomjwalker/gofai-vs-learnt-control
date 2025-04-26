@@ -221,4 +221,4 @@ def update_plot(_, cost_key, var1, var2,
 
 # ----------------------------------------------------------------
 if __name__ == "__main__":
-    app.run(debug=True) 
+    app.run(debug=True)

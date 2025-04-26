@@ -192,10 +192,10 @@
     "Icm1": 0.15497066975016235,
     "Icm2": 0.15497066975016235,
     "g": 9.81,
-    "b_slide": 0.05,
+    "b_slide": 500,
     "b_joint1": 0.05,
     "b_joint2": 0.05,
-    "b_fric": 1.0,
+    "b_fric": 500,
     "gear": 500.0,
     "control_limits_actuator": [
       -1.0,

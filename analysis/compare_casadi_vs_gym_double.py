@@ -122,6 +122,19 @@ if param_values_casadi.shape[0] != expected_param_size:
 # --- Simulation Functions --- 
 def simulate_casadi(initial_state, control_sequence):
     print(f"Simulating CasADi model (Manual RK4 integration, DT={DT})...") 
+    
+    # --- DEBUG: Verify parameter values being used --- 
+    try:
+        b_slide_index = 10 # Based on param_order in parameters.py
+        b_fric_index = 11
+        loaded_b_slide = param_values_casadi[b_slide_index].full().item()
+        loaded_b_fric = param_values_casadi[b_fric_index].full().item()
+        print(f"[DEBUG] Using b_slide (param {b_slide_index}): {loaded_b_slide:.4f}")
+        print(f"[DEBUG] Using b_fric (param {b_fric_index}): {loaded_b_fric:.4f}")
+    except Exception as e:
+        print(f"[DEBUG] Error accessing debug params: {e}")
+    # --- END DEBUG --- 
+    
     n_steps = len(control_sequence)
     casadi_states = np.zeros((n_steps + 1, 6))
     casadi_states[0, :] = initial_state
@@ -132,6 +145,17 @@ def simulate_casadi(initial_state, control_sequence):
         try:
             # Manual RK4 implementation
             k1 = casadi_ode_func(current_x_dm, control_input_dm, param_values_casadi)
+            
+            # --- DEBUG: Print state and derivative for first few steps --- 
+            if i < 3:
+                current_x_np = current_x_dm.full().flatten()
+                k1_np = k1.full().flatten()
+                print(f"[DEBUG] Step {i+1}: Current State x = [{', '.join(f'{x:.3f}' for x in current_x_np)}]")
+                print(f"[DEBUG] Step {i+1}: Derivative k1 = [{', '.join(f'{kd:.3f}' for kd in k1_np)}]")
+                # Specifically check x_ddot (index 3 of k1) and x_d (index 3 of current_x)
+                print(f"[DEBUG] Step {i+1}: x_d = {current_x_np[3]:.3f}, x_ddot(k1[3]) = {k1_np[3]:.3f}")
+            # --- END DEBUG ---
+            
             k2 = casadi_ode_func(current_x_dm + DT/2 * k1, control_input_dm, param_values_casadi)
             k3 = casadi_ode_func(current_x_dm + DT/2 * k2, control_input_dm, param_values_casadi)
             k4 = casadi_ode_func(current_x_dm + DT * k3, control_input_dm, param_values_casadi)
@@ -315,15 +339,19 @@ elif SIM_MODE == 'multi_angle':
 # --- Visualization --- 
 if SHOW_ANIM:
     states_to_animate = []
+    labels = [] # Store labels for the legend
     if SIM_MODE == 'multi_angle':
         title = f"CasADi Double Pendulum Simulation (Manual RK4, Multiple Init Angles, dt={DT:.3f})"
         states_to_animate = list(multi_casadi_states.values())
+        labels = list(multi_casadi_states.keys())
     elif casadi_states is not None:
         title = f"CasADi (Manual RK4) Double Pendulum Simulation (Mode: {SIM_MODE}, dt={DT:.3f})"
         states_to_animate = [casadi_states]
+        labels = ["CasADi Model (Manual RK4)"]
         if gym_states is not None:
              title = f"CasADi (Manual RK4) vs Gym Double Pendulum (Mode: {SIM_MODE}, dt={DT:.3f})"
              states_to_animate.append(gym_states)
+             labels.append("Gym Sim")
     else:
         print("No valid states to animate.")
 
@@ -340,12 +368,12 @@ if SHOW_ANIM:
         ax_anim.set_ylim(-vis_pole1_length - vis_pole2_length - 0.2, vis_pole1_length + vis_pole2_length + 0.2)
 
         for i in range(num_trajectories):
-            cart = plt.Rectangle((0, -cart_h/2), cart_w, cart_h, fc=colors[i], alpha=0.6 if num_trajectories > 1 else 1.0)
+            cart = plt.Rectangle((0, -cart_h/2), cart_w, cart_h, fc=colors[i], alpha=0.6 if num_trajectories > 1 else 1.0, label=labels[i])
             ax_anim.add_patch(cart)
             carts.append(cart)
-            line_p1, = ax_anim.plot([], [], '-', lw=3, color=colors[i], alpha=0.8)
+            line_p1, = ax_anim.plot([], [], '-', lw=3, color=colors[i], alpha=0.8, label=f"{labels[i]} Pole 1")
             lines_p1.append(line_p1)
-            line_p2, = ax_anim.plot([], [], '-', lw=3, color=colors[i], alpha=0.8)
+            line_p2, = ax_anim.plot([], [], '-', lw=3, color=colors[i], alpha=0.8, label=f"{labels[i]} Pole 2")
             lines_p2.append(line_p2)
             piv1, = ax_anim.plot([], [], 'o', ms=5, color=colors[i])
             pivots1.append(piv1)
@@ -355,6 +383,10 @@ if SHOW_ANIM:
         time_text_anim = ax_anim.text(0.02, 0.95, '', transform=ax_anim.transAxes, va='top')
         max_frames = max(s.shape[0] for s in states_to_animate) if states_to_animate else 0
         
+        # Add legend - using labels from carts should be sufficient
+        legend_handles = [c for c in carts] # Use cart patches for legend
+        ax_anim.legend(handles=legend_handles, loc='upper right') 
+
         ani = animation.FuncAnimation(
             fig_anim, update_animation, 
             frames=max_frames, 
