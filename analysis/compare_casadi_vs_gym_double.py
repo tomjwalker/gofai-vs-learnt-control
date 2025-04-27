@@ -38,6 +38,7 @@ if project_root not in sys.path:
 from src.utils.parameters import load_double_pendulum_params # Updated
 from src.environments.wrappers import InvertedDoublePendulumComparisonWrapper # Updated
 from src.environments.double_pendulum_dynamics import get_dynamics_function # Updated
+from src.utils.integration import rk4_step # Import the new helper
 
 
 print("Running DOUBLE Pendulum CasADi and Gym dynamics simulation and comparison...")
@@ -121,7 +122,7 @@ if param_values_casadi.shape[0] != expected_param_size:
 
 # --- Simulation Functions --- 
 def simulate_casadi(initial_state, control_sequence):
-    print(f"Simulating CasADi model (Manual RK4 integration, DT={DT})...") 
+    print(f"Simulating CasADi model (using shared RK4 integration, DT={DT})...") # Updated print
     
     # --- DEBUG: Verify parameter values being used --- 
     try:
@@ -143,24 +144,9 @@ def simulate_casadi(initial_state, control_sequence):
     for i in range(n_steps):
         control_input_dm = ca.DM([control_sequence[i]]) 
         try:
-            # Manual RK4 implementation
-            k1 = casadi_ode_func(current_x_dm, control_input_dm, param_values_casadi)
+            # Use the shared RK4 step function
+            current_x_dm = rk4_step(casadi_ode_func, current_x_dm, control_input_dm, DT, param_values_casadi)
             
-            # --- DEBUG: Print state and derivative for first few steps --- 
-            if i < 3:
-                current_x_np = current_x_dm.full().flatten()
-                k1_np = k1.full().flatten()
-                print(f"[DEBUG] Step {i+1}: Current State x = [{', '.join(f'{x:.3f}' for x in current_x_np)}]")
-                print(f"[DEBUG] Step {i+1}: Derivative k1 = [{', '.join(f'{kd:.3f}' for kd in k1_np)}]")
-                # Specifically check x_ddot (index 3 of k1) and x_d (index 3 of current_x)
-                print(f"[DEBUG] Step {i+1}: x_d = {current_x_np[3]:.3f}, x_ddot(k1[3]) = {k1_np[3]:.3f}")
-            # --- END DEBUG ---
-            
-            k2 = casadi_ode_func(current_x_dm + DT/2 * k1, control_input_dm, param_values_casadi)
-            k3 = casadi_ode_func(current_x_dm + DT/2 * k2, control_input_dm, param_values_casadi)
-            k4 = casadi_ode_func(current_x_dm + DT * k3, control_input_dm, param_values_casadi)
-            
-            current_x_dm = current_x_dm + DT/6 * (k1 + 2*k2 + 2*k3 + k4)
             current_x = current_x_dm.full().flatten() # Convert back to numpy for storage/clamping
 
             # --- Clamp the slider position (x) --- 
@@ -341,15 +327,15 @@ if SHOW_ANIM:
     states_to_animate = []
     labels = [] # Store labels for the legend
     if SIM_MODE == 'multi_angle':
-        title = f"CasADi Double Pendulum Simulation (Manual RK4, Multiple Init Angles, dt={DT:.3f})"
+        title = f"CasADi Double Pendulum Simulation (RK4, Multiple Init Angles, dt={DT:.3f})" # Updated title
         states_to_animate = list(multi_casadi_states.values())
         labels = list(multi_casadi_states.keys())
     elif casadi_states is not None:
-        title = f"CasADi (Manual RK4) Double Pendulum Simulation (Mode: {SIM_MODE}, dt={DT:.3f})"
+        title = f"CasADi (RK4) Double Pendulum Simulation (Mode: {SIM_MODE}, dt={DT:.3f})" # Updated title
         states_to_animate = [casadi_states]
-        labels = ["CasADi Model (Manual RK4)"]
+        labels = ["CasADi Model (RK4)"] # Updated label
         if gym_states is not None:
-             title = f"CasADi (Manual RK4) vs Gym Double Pendulum (Mode: {SIM_MODE}, dt={DT:.3f})"
+             title = f"CasADi (RK4) vs Gym Double Pendulum (Mode: {SIM_MODE}, dt={DT:.3f})" # Updated title
              states_to_animate.append(gym_states)
              labels.append("Gym Sim")
     else:
@@ -401,13 +387,13 @@ if SHOW_ANIM:
 # --- Static State Plots --- 
 if SHOW_PLOT:
     if SIM_MODE == 'multi_angle':
-        plot_states(time_vector, multi_casadi_states, f"CasADi States (Manual RK4, Multi-Angle, dt={DT:.3f})")
+        plot_states(time_vector, multi_casadi_states, f"CasADi States (RK4, Multi-Angle, dt={DT:.3f})") # Updated title
     elif casadi_states is not None:
-        states_to_plot = {"CasADi Model (Manual RK4)": casadi_states}
-        plot_title = f"CasADi States (Manual RK4, Mode: {SIM_MODE}, dt={DT:.3f})"
+        states_to_plot = {"CasADi Model (RK4)": casadi_states} # Updated label
+        plot_title = f"CasADi States (RK4, Mode: {SIM_MODE}, dt={DT:.3f})" # Updated title
         if gym_states is not None:
             states_to_plot["Gym Sim"] = gym_states
-            plot_title = f"CasADi (Manual RK4) vs Gym States (Mode: {SIM_MODE}, dt={DT:.3f})"
+            plot_title = f"CasADi (RK4) vs Gym States (Mode: {SIM_MODE}, dt={DT:.3f})" # Updated title
         plot_states(time_vector, states_to_plot, plot_title)
     else:
          print("No valid states to plot.")

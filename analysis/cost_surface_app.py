@@ -2,9 +2,18 @@
 # ----------------------------------------------------------------
 import numpy as np
 import casadi as ca
+import sys         # Added
+from pathlib import Path # Added
 import dash
 from dash import dcc, html, Input, Output, State
 import plotly.graph_objs as go
+
+# --- Add project root to Python path --- Added section
+project_root = str(Path(__file__).resolve().parent.parent)
+if project_root not in sys.path:
+    sys.path.append(project_root)
+    print(f"Added project root to path: {project_root}")
+# ---------------------------------------
 
 from src.algorithms.classic.mpc_costs import COST_FUNCTION_MAP
 

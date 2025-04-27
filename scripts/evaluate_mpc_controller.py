@@ -10,17 +10,17 @@ It uses sensible default configurations (cost function, initial guess strategy,
 parameter file) based on the specified environment ID, but these can be 
 overridden via command-line arguments.
 
-Example Usage:
+Example Usage (PowerShell):
 
 1. Standard Inverted Pendulum Stabilization (defaults handle cost/guess/params):
    -----------------------------------------------------------------------------
-   python scripts/evaluate_mpc_controller.py \
-       --env-id InvertedPendulum-v5 \
-       --num-episodes 3 \
-       --max-steps 500 \
-       --q-diag 10.0 1.0 0.1 0.1 \
-       --r-val 0.1 \
-       --plot-diagnostics \
+   python scripts/evaluate_mpc_controller.py `
+       --env-id InvertedPendulum-v5 `
+       --num-episodes 3 `
+       --max-steps 500 `
+       --q-diag 10.0 1.0 0.1 0.1 `
+       --r-val 0.1 `
+       --plot-diagnostics `
        --save-animated-diagnostics
 
 2. Inverted Pendulum Swing-Up (defaults handle cost/guess/params):
@@ -28,15 +28,15 @@ Example Usage:
    # First, ensure the swing-up parameters with unlimited pole angle exist:
    # python src/environments/extract_params.py --unlimit-pole --output-suffix _swingup
 
-   python scripts/evaluate_mpc_controller.py \
-       --env-id Pendulum-SwingUp \
-       --num-episodes 1 \
-       --max-steps 500 \
-       --horizon 80 \
-       --q-diag 0.1 5 0.1 0.1 \
-       --r-val 0.01 \
-       --q-terminal-multiplier 10 \
-       --plot-diagnostics \
+   python scripts/evaluate_mpc_controller.py `
+       --env-id Pendulum-SwingUp-v0 ` # Note: Use the registered SwingUp ID
+       --num-episodes 1 `
+       --max-steps 500 `
+       --horizon 80 `
+       --q-diag 0.1 5 0.1 0.1 `
+       --r-val 0.01 `
+       --q-terminal-multiplier 10 `
+       --plot-diagnostics `
        --save-animated-diagnostics
 
 Notes:
@@ -162,11 +162,11 @@ def create_animated_diagnostics(history, episode=0):
         
         # Update forecast lines - Check if data exists for this frame
         forecast_data_missing = False # Flag
-        if frame < len(history) and "X_sol" in history[frame] and history[frame]["X_sol"] is not None:
-            forecast_steps = history[frame]["X_sol"].shape[1]
+        if frame < len(history) and "X_solution" in history[frame] and history[frame]["X_solution"] is not None:
+            forecast_steps = history[frame]["X_solution"].shape[1]
             forecast_times = np.arange(frame, frame + forecast_steps)
             for i in range(4):
-                forecast_lines[i].set_data(forecast_times, history[frame]["X_sol"][i, :])
+                forecast_lines[i].set_data(forecast_times, history[frame]["X_solution"][i, :])
         else: # Clear forecast lines if no data
              forecast_data_missing = True
              for i in range(4):
@@ -175,9 +175,9 @@ def create_animated_diagnostics(history, episode=0):
         # Update control lines
         actual_control.set_data(time_indices, [step.get("u_next", np.nan) for step in current_history]) # Use get
         # Check if data exists
-        if frame < len(history) and "U_sol" in history[frame] and history[frame]["U_sol"] is not None:
+        if frame < len(history) and "U_solution" in history[frame] and history[frame]["U_solution"] is not None:
             if 'forecast_steps' in locals(): 
-                 forecast_control.set_data(forecast_times[:-1], history[frame]["U_sol"][0, :])
+                 forecast_control.set_data(forecast_times[:-1], history[frame]["U_solution"][0, :])
             else: 
                  forecast_data_missing = True # Mark as missing if X_sol wasn't plotted
                  forecast_control.set_data([], [])
