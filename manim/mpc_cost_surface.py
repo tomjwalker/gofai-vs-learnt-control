@@ -61,14 +61,22 @@ class MPCCostSurfaceAnimation(ThreeDScene):
             self.wait(5)
             return
             
-        # --- ADJUST COST WEIGHTS ---
-        # Double the weight for theta_dot (index 3)
+        # --- ADJUST COST WEIGHTS --- 
+        # Modify weights AFTER loading from config
         if len(q_diag) > 3:
+            print(f"Original q_diag[1] (theta): {q_diag[1]}")
             print(f"Original q_diag[3] (theta_dot): {q_diag[3]}")
-            q_diag[3] *= 2.0
+            # Reduce theta weight
+            q_diag[1] *= 0.8 
+            # Set theta_dot weight (original * 2.0 * 0.75 = original * 1.5)
+            # Assuming the loaded value is the 'original'
+            # Let's recalculate based on loaded value to avoid compounding if script runs weirdly
+            original_theta_dot_weight_from_config = float(run_config.get("q_diag", ["0.1", "5.0", "0.1", "0.1"])[3]) # Reload original string and convert
+            q_diag[3] = original_theta_dot_weight_from_config * 1.5 # Apply desired factor (1.5 = 2.0 * 0.75)
+            print(f"Modified q_diag[1] (theta): {q_diag[1]}")
             print(f"Modified q_diag[3] (theta_dot): {q_diag[3]}")
         else:
-            print("Warning: q_diag does not have enough elements to adjust theta_dot weight.")
+            print("Warning: q_diag does not have enough elements to adjust weights.")
             
         # TODO: Check cost_type from config matches PendulumSwingupAtan2Cost?
         # cost_type_from_config = run_config.get("cost_type")
@@ -183,13 +191,13 @@ class MPCCostSurfaceAnimation(ThreeDScene):
         )
 
         # --- Animation Setup ---
-        # Adjust camera angle and zoom
-        self.set_camera_orientation(phi=65 * DEGREES, theta=45 * DEGREES, zoom=0.5) 
+        # Adjust camera angle (lower, rotated 90deg), zoom further
+        self.set_camera_orientation(phi=50 * DEGREES, theta=135 * DEGREES, zoom=0.45) 
         self.add(axes)
         self.play(Create(surface), Create(axis_labels)) # Create labels alongside surface
 
-        # Add title BEFORE the loop - ESCAPED backslashes
-        title = Text("MPC Cost Surface ($\\theta$ vs $\\dot{\\theta}$)", font_size=36).to_edge(UP)
+        # Add title BEFORE the loop - Use MathTex for better LaTeX rendering
+        title = MathTex("\text{MPC Cost Surface (}\\theta\text{ vs }\\dot{\\theta}\text{)}", font_size=36).to_edge(UP)
         self.add_fixed_in_frame_mobjects(title) # Keep title fixed on screen
 
         # --- Animation Loop Initialization ---
