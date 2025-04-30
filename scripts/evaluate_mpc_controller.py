@@ -51,12 +51,13 @@ from pathlib import Path
 import matplotlib.animation as animation
 from matplotlib.animation import FuncAnimation
 import imageio  # For saving video
-import argparse # Added
+import argparse # Re-add for clarity, ensure it's the standard import
 import datetime # Added
 import hashlib  # Added
 import json     # Added
 import ast      # Added
 import os       # Added
+import pickle   # Added for Manim data saving
 
 # Add the project root to the Python path
 project_root = str(Path(__file__).parent.parent)
@@ -341,7 +342,7 @@ def run_mpc_experiment(args):
         print(f"\n--- Starting Episode {episode} --- ")
         # Reset environment - use wrapper's initial state if applicable
         # The PendulumSwingUp wrapper (applied internally via make_env) handles the reset logic.
-        obs, info = env.reset() 
+        obs, info = env.reset()
         # Print appropriate reset message
         if is_swingup_task:
              print(f"Resetting env for swing-up: {args.env_id}")
@@ -350,7 +351,8 @@ def run_mpc_experiment(args):
              print(f"Resetting env {args.env_id} with default state: {obs}")
 
         obs = np.array(obs, dtype=np.float64)
-        history = []
+        history = [] # Standard history for plotting/summary
+        manim_data = [] # List to store detailed data for Manim
         frames = []
         ep_reward = 0.0
         last_action = np.zeros(control_dim) # Initialize last action
@@ -362,10 +364,29 @@ def run_mpc_experiment(args):
                 # Time to solve MPC
                 # print(f"Step {step}: Solving MPC...") # Optional debug
                 solver_outputs = controller.solve(obs)
-                u_next = solver_outputs["u_next"] 
+                u_next = solver_outputs["u_next"]
                 last_action = np.array([u_next]) # Store the new action (as numpy array)
                 if control_dim > 1:
                      last_action = u_next # If solve returns multi-dim control
+
+                # --- Collect Manim Data --- 
+                if args.save_manim_data and episode == 0:
+                    # Ensure solutions are numpy arrays for pickling if they exist
+                    X_sol_np = np.array(solver_outputs["X_solution"]) if solver_outputs["X_solution"] is not None else None
+                    U_sol_np = np.array(solver_outputs["U_solution"]) if solver_outputs["U_solution"] is not None else None
+                    manim_step_data = {
+                        "step": step,
+                        "obs": obs.copy(), # Current state before solve
+                        "X_solution": X_sol_np, # Predicted states (N+1 steps)
+                        "U_solution": U_sol_np, # Predicted controls (N steps)
+                        "cost": solver_outputs["cost"],
+                        "constraint_violation": solver_outputs["constraint_violation"],
+                        "solver_status": solver_outputs["solver_status"],
+                        "u_applied": u_next # The control actually applied at this step
+                    }
+                    manim_data.append(manim_step_data)
+                # --------------------------
+
             else:
                 # Apply previous action (Zero-Order Hold)
                 # print(f"Step {step}: Holding action {last_action}") # Optional debug
@@ -379,7 +400,7 @@ def run_mpc_experiment(args):
             # ----------------------------------------
 
             # Ensure action has correct shape for env.step
-            action_to_apply = last_action.reshape((control_dim,)) 
+            action_to_apply = last_action.reshape((control_dim,))
             
             # Step environment
             obs_next, reward, terminated, truncated, info = env.step(action_to_apply)
@@ -410,6 +431,17 @@ def run_mpc_experiment(args):
         episode_rewards.append(ep_reward)
         episode_lengths.append(step + 1)
         print(f"Episode {episode} Finished: Length={step+1}, Reward={ep_reward:.2f}")
+
+        # --- Save Manim Data (after first episode) --- 
+        if args.save_manim_data and episode == 0 and manim_data:
+            manim_data_path = run_dir / "manim_mpc_data.pkl"
+            try:
+                with open(manim_data_path, 'wb') as f:
+                    pickle.dump(manim_data, f)
+                print(f"Manim MPC data for episode 0 saved to: {manim_data_path}")
+            except Exception as e:
+                print(f"Error saving Manim data: {e}")
+        # -------------------------------------------
 
         # Save video for this episode to videos_dir
         if frames:
@@ -455,6 +487,12 @@ def run_mpc_experiment(args):
     env.close()
     print("Experiment Complete.")
 
+def render_mode_type(arg):
+    """Helper function for argparse to convert 'None' string to None type."""
+    if arg.lower() == 'none':
+        return None
+    return arg
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run MPC controller on a Gymnasium environment.")
 
@@ -462,10 +500,17 @@ if __name__ == "__main__":
     parser.add_argument("--env-id", type=str, default="InvertedPendulum-v5", help="Gymnasium environment ID")
     parser.add_argument("--num-episodes", type=int, default=3, help="Number of episodes to run")
     parser.add_argument("--max-steps", type=int, default=1000, help="Maximum steps per episode")
-    parser.add_argument("--render-mode", type=str, default="rgb_array", choices=["human", "rgb_array", None], help="Rendering mode")
+    # --- Modified render-mode argument --- 
+    parser.add_argument("--render-mode", 
+                        type=render_mode_type, # Use the helper function for type conversion
+                        default="rgb_array", 
+                        choices=["human", "rgb_array", None], # Keep None as a valid choice internaly
+                        help="Rendering mode (human, rgb_array, or None)")
+    # ------------------------------------
     parser.add_argument("--save-dir", type=str, default="runs/MPC", help="Base directory to save run results")
     parser.add_argument("--plot-diagnostics", action="store_true", default=True, help="Generate diagnostic plots for each episode (default: True)")
     parser.add_argument("--save-animated-diagnostics", action="store_true", default=True, help="Generate and save animated diagnostic plots for each episode (default: True)")
+    parser.add_argument("--save-manim-data", action="store_true", help="Save detailed MPC data from the first episode for Manim visualizations")
 
     # --- MPC Args --- 
     parser.add_argument("--cost-type", type=str, default=None, choices=['quadratic', 'pendulum_swingup', 'pendulum_atan2'], help="Cost function type for MPC (default: depends on env)")
