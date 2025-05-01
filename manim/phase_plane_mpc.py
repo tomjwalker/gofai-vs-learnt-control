@@ -42,6 +42,7 @@ RUN_ID = "20250430_184109_36e06939"
 data_dir = project_root / "runs" / "MPC" / RUN_ID
 pkl_path = data_dir / "manim_mpc_data.pkl"
 config_path = data_dir / "config.json"
+ctrl_cache_path = data_dir / "ctrl_cache.pkl" # Path for cached control grid
 
 # -----------------------------------------------------------------------------
 # Try importing the real MPC solver if available
@@ -198,6 +199,23 @@ class PhasePlaneMPC(ThreeDScene):
         
         self.add(axes, labels)
 
+        # --- Create LaTeX labels ---
+        # Using \boldsymbol for state vector x
+        open_loop_eq = MathTex(r"\dot{\boldsymbol x} = f(\boldsymbol x)", font_size=36)
+        closed_loop_eq = MathTex(r"\dot{\boldsymbol x} = f(\boldsymbol x) + g(\boldsymbol x)\,\boldsymbol{\pi}(\boldsymbol x)", font_size=36)
+        state_assumption_eq = MathTex(r"\text{Assuming } x = \dot{x} = 0", font_size=28)
+        
+        # Position equations using .to_edge(UL)
+        open_loop_eq.to_edge(UL)
+        closed_loop_eq.align_to(open_loop_eq, UL) # Align to same corner edge
+        # Position assumption below the main equations
+        state_assumption_eq.next_to(open_loop_eq, DOWN, buff=0.1).align_to(open_loop_eq, LEFT)
+
+        # Store the current equation label for transformations
+        current_eq_label = open_loop_eq
+        # Add assumption label separately (doesn't transform)
+        self.add(state_assumption_eq)
+
         # --------------------------------------------------------------
         # Open-loop vector field (grey)
         # USE EXTERNAL DYNAMICS FUNCTION
@@ -244,38 +262,65 @@ class PhasePlaneMPC(ThreeDScene):
             y_range=[-12, 12],
             padding=1,
         )
-        self.add(open_stream)
-        self.play(open_stream.create(), run_time=2)
-        # Add wait after showing open-loop
-        self.wait(2)
+        # REMOVED self.add(open_stream)
+        # Animate creation immediately after axes, along with its label
+        self.play(Create(open_stream), Write(current_eq_label), run_time=2)
+        
+        # CHANGE wait time after showing open-loop
+        self.wait(10)
 
         # --------------------------------------------------------------
         # Closed-loop field (blue) – sample on coarse grid then interpolate
-        # USE EXTERNAL DYNAMICS FUNCTION
+        # USE EXTERNAL DYNAMICS FUNCTION & CACHING
         # --------------------------------------------------------------
         grid_theta = np.linspace(-2 * PI, 2 * PI, 25)
         grid_omega = np.linspace(-12, 12, 25)
         ctrl_cache: dict[tuple[float, float], np.ndarray] = {}
-        if _calculate_state_derivatives is not None and params_dict:
-            for θ_grid in grid_theta:
-                for ω_grid in grid_omega:
-                    u = first_control_from_mpc(θ_grid, ω_grid) # Get MPC control
-                    
-                    # Construct 4D state
-                    x_state_grid = ca.vertcat(0.0, θ_grid, 0.0, ω_grid)
-                    u_input = ca.vertcat(u)
-                    
-                    try:
-                        state_deriv_grid = _calculate_state_derivatives(x_state_grid, u_input, params_dict)
-                        dθ_grid = state_deriv_grid[1].full().item()
-                        dω_grid = state_deriv_grid[3].full().item()
-                        ctrl_cache[(θ_grid, ω_grid)] = np.array([dθ_grid, dω_grid])
-                    except Exception as e:
-                        print(f"Error in ctrl_cache dynamics calc ({θ_grid:.2f},{ω_grid:.2f}): {e}")
-                        ctrl_cache[(θ_grid, ω_grid)] = np.array([0.0, 0.0]) # Default on error
+        
+        # --- Caching Logic ---
+        if ctrl_cache_path.exists():
+            print(f"Loading control grid from cache: {ctrl_cache_path}")
+            try:
+                with open(ctrl_cache_path, "rb") as f_cache:
+                    ctrl_cache = pickle.load(f_cache)
+                # Basic validation (check if keys match expected grid? Optional)
+                if not isinstance(ctrl_cache, dict):
+                    print("Warning: Cache file invalid format. Recalculating.")
+                    ctrl_cache = {}
+            except Exception as e:
+                print(f"Warning: Failed to load cache file ({e}). Recalculating.")
+                ctrl_cache = {}
         else:
-            print("Warning: Cannot calculate closed-loop field, dynamics function unavailable.")
+             print("Control grid cache not found. Calculating...")
 
+        if not ctrl_cache: # If cache was empty or failed to load
+            if _calculate_state_derivatives is not None and params_dict:
+                print("Calculating Control Grid...") # Simple print message
+                # Use rich.progress context manager
+                for θ_grid in grid_theta:
+                    for ω_grid in grid_omega:
+                        u = first_control_from_mpc(θ_grid, ω_grid) # Get MPC control
+                        x_state_grid = ca.vertcat(0.0, θ_grid, 0.0, ω_grid)
+                        u_input = ca.vertcat(u)
+                        try:
+                            state_deriv_grid = _calculate_state_derivatives(x_state_grid, u_input, params_dict)
+                            dθ_grid = state_deriv_grid[1].full().item()
+                            dω_grid = state_deriv_grid[3].full().item()
+                            ctrl_cache[(θ_grid, ω_grid)] = np.array([dθ_grid, dω_grid])
+                        except Exception as e:
+                            ctrl_cache[(θ_grid, ω_grid)] = np.array([0.0, 0.0]) # Default on error
+                
+                # Save the calculated cache
+                try:
+                    with open(ctrl_cache_path, "wb") as f_cache:
+                        pickle.dump(ctrl_cache, f_cache)
+                    print(f"Control grid saved to cache: {ctrl_cache_path}")
+                except Exception as e:
+                    print(f"Warning: Failed to save control grid cache ({e}).")
+            else:
+                print("Warning: Cannot calculate closed-loop field, dynamics function unavailable.")
+
+        # --- Define ctrl_vec function (uses ctrl_cache) ---
         def ctrl_vec(pt):
             if not ctrl_cache:
                  return np.array([0,0,0]) # Cannot calculate
@@ -307,7 +352,9 @@ class PhasePlaneMPC(ThreeDScene):
             y_range=[-12, 12],
             padding=1,
         )
-        self.play(closed_stream.create(), run_time=2)
+        # Animate closed_stream creation AND transform the equation label
+        # We transform current_eq_label which starts as open_loop_eq
+        self.play(Create(closed_stream), Transform(current_eq_label, closed_loop_eq), run_time=2)
 
         # Fade open-loop slightly to emphasise control
         self.play(open_stream.animate.set_opacity(0.3), run_time=1)
