@@ -165,7 +165,14 @@ class MPCCostSurfaceAnimation(ThreeDScene):
             x_length=7,
             y_length=7,
             z_length=5,
-            axis_config={"include_numbers": True, "include_tip": True},
+            # UPDATED axis_config to format x-axis numbers
+            axis_config={
+                "include_numbers": True, 
+                "include_tip": True
+            },
+            x_axis_config={
+                "number_to_text_func": lambda n: f"{n:.1f}", # Format x-axis numbers to 1 d.p.
+            },
             # Remove labels from constructor
         )
         
