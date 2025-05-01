@@ -166,15 +166,36 @@ class PhasePlaneMPC(ThreeDScene):
             y_length=5,
             tips=False,
             axis_config=dict(include_numbers=True, stroke_width=1),
+            # Use decimal_number_config for rounding
+            x_axis_config={
+                "include_numbers": False, # Disable default numbers for X-axis
+            },
+            y_axis_config={
+                "decimal_number_config": {"num_decimal_places": 1},
+                "include_numbers": True,
+            },
         )
-        axes.x_axis.number_to_text_func = lambda n: (
-            f"{int(np.round(n / PI))}\\pi" if abs(n / PI - round(n / PI)) < 1e-6 else f"{n:.1f}"
-        )
-        axes.y_axis.number_to_text_func = lambda n: f"{n:.1f}"
-        labels = VGroup(
-            axes.get_x_axis_label(MathTex(r"\theta")),
-            axes.get_y_axis_label(MathTex(r"\dot{\theta}")),
-        )
+        # REMOVE post-creation formatting attempts
+        # axes.x_axis.number_to_text_func = ...
+        # axes.y_axis.number_to_text_func = ...
+
+        # --- Manually add Pi labels for X-axis --- 
+        pi_labels = {
+            -2 * PI: MathTex("-2\pi"),
+            -PI: MathTex("-\pi"),
+            0: MathTex("0"), # Manually add 0 if needed, or let default handle?
+            PI: MathTex("\pi"),
+            2 * PI: MathTex("2\pi"),
+        }
+        axes.x_axis.add_labels(pi_labels)
+        
+        # Standard Y axis label
+        y_label = axes.get_y_axis_label(MathTex(r"\dot{\theta}"))
+        # Create X axis label separately as add_labels might overwrite it
+        x_label = axes.get_x_axis_label(MathTex(r"\theta"))
+        
+        labels = VGroup(x_label, y_label)
+        
         self.add(axes, labels)
 
         # --------------------------------------------------------------
@@ -218,13 +239,15 @@ class PhasePlaneMPC(ThreeDScene):
         open_stream = StreamLines(
             open_vec,
             color=GREY_A,
-            stroke_width=0.7,
+            stroke_width=0.5,
             x_range=[-2 * PI, 2 * PI],
             y_range=[-12, 12],
             padding=1,
         )
         self.add(open_stream)
         self.play(open_stream.create(), run_time=2)
+        # Add wait after showing open-loop
+        self.wait(2)
 
         # --------------------------------------------------------------
         # Closed-loop field (blue) – sample on coarse grid then interpolate
@@ -279,7 +302,7 @@ class PhasePlaneMPC(ThreeDScene):
         closed_stream = StreamLines(
             ctrl_vec,
             color=BLUE_D,
-            stroke_width=1.2,
+            stroke_width=1.5,
             x_range=[-2 * PI, 2 * PI],
             y_range=[-12, 12],
             padding=1,
@@ -305,13 +328,20 @@ class PhasePlaneMPC(ThreeDScene):
             # Access self.step_idx safely now
             step = recorded_steps[self.step_idx] 
             if step["X_solution"] is None:
-                return VMobject()
+                return VMobject() # Return empty if no solution
             pts = [axes.c2p(x[1], x[3]) for x in step["X_solution"].T]
-            vm = VMobject(stroke_color=ORANGE, stroke_width=2, z_index=4)
-            vm.set_points_as_corners(pts)
-            vm.set_opacity(0.8)
-            vm.set_dash_array([0.1, 0.1])
-            return vm
+            # Create the dashed line
+            line = VMobject(stroke_color=ORANGE, stroke_width=2, fill_opacity=0, z_index=4) # Explicitly set fill_opacity=0
+            line.set_points_as_corners(pts)
+            line.set_opacity(0.8)
+            line.set_dash_array([0.1, 0.1])
+            # Create dots at each forecast point, ensure no fill
+            dots = VGroup(*[Dot(point=p, radius=0.03, color=ORANGE, fill_opacity=0.8) for p in pts])
+            dots.set_fill(opacity=0) # Ensure dots group has no fill
+            # Return group containing line and dots, ensure no fill
+            final_group = VGroup(line, dots)
+            final_group.set_fill(opacity=0)
+            return final_group
 
         horizon = always_redraw(horizon_vmobject)
         self.add(horizon)
