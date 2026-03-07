@@ -296,42 +296,18 @@ def rollout_double_pendulum_casadi(
 ) -> RolloutResult:
     initial_state_vector = _coerce_vector(initial_state, name="initial_state")
     controls = _coerce_control_sequence(control_sequence)
-    params, model_timestep, _joint_limits = load_double_pendulum_params(param_path)
-    if params is None or model_timestep is None:
-        raise ValueError(f"Could not load double-pendulum parameters from {param_path}.")
-    if model_timestep <= 0.0:
-        raise ValueError(f"Model timestep must be positive, got {model_timestep}.")
-
-    substeps_per_step = int(round(dt / model_timestep))
-    if substeps_per_step <= 0:
-        raise ValueError(
-            f"Rollout dt={dt} must be at least one model timestep={model_timestep}."
-        )
-
-    reconstructed_dt = substeps_per_step * model_timestep
-    if not np.isclose(reconstructed_dt, dt, atol=1e-12, rtol=1e-9):
-        raise ValueError(
-            "Double-pendulum rollout dt must be an integer multiple of the model timestep. "
-            f"Got dt={dt} and model_timestep={model_timestep}."
-        )
+    states = np.zeros((controls.shape[0] + 1, initial_state_vector.shape[0]), dtype=np.float64)
+    states[0, :] = initial_state_vector
 
     current_state = initial_state_vector.copy()
-    parameter_vector = ca.DM(params)
-    states = np.zeros((controls.shape[0] + 1, initial_state_vector.shape[0]), dtype=np.float64)
-    states[0, :] = current_state
-
+    frame_skip = 1
     for index, control in enumerate(controls, start=1):
-        current_state_dm = ca.DM(current_state)
-        control_dm = ca.DM([control])
-        for _ in range(substeps_per_step):
-            current_state_dm = double_pendulum_dynamics_step(
-                x=current_state_dm,
-                u=control_dm,
-                dt=model_timestep,
-                params=parameter_vector,
-                integration_method="rk4",
-            )
-        current_state = np.asarray(current_state_dm.full().ravel(), dtype=np.float64)
+        current_state, frame_skip = step_double_pendulum_casadi(
+            state=current_state,
+            control=control,
+            dt=dt,
+            param_path=param_path,
+        )
         states[index, :] = current_state
 
     return RolloutResult(
@@ -339,9 +315,52 @@ def rollout_double_pendulum_casadi(
         dt=float(dt),
         state_labels=_DOUBLE_STATE_LABELS,
         state_convention="casadi_absolute",
-        frame_skip=substeps_per_step,
+        frame_skip=frame_skip,
         truncated=False,
     )
+
+
+def step_double_pendulum_casadi(
+    *,
+    state: npt.ArrayLike,
+    control: float,
+    dt: float,
+    param_path: str = "src/environments/double_pendulum_params.json",
+    integration_timestep: float | None = None,
+) -> tuple[FloatArray, int]:
+    state_vector = _coerce_vector(state, name="state")
+    params, model_timestep, _joint_limits = load_double_pendulum_params(param_path)
+    if params is None or model_timestep is None:
+        raise ValueError(f"Could not load double-pendulum parameters from {param_path}.")
+    substep_dt = model_timestep if integration_timestep is None else float(integration_timestep)
+    if substep_dt <= 0.0:
+        raise ValueError(f"Model timestep must be positive, got {substep_dt}.")
+
+    substeps_per_step = int(round(dt / substep_dt))
+    if substeps_per_step <= 0:
+        raise ValueError(
+            f"Rollout dt={dt} must be at least one model timestep={substep_dt}."
+        )
+
+    reconstructed_dt = substeps_per_step * substep_dt
+    if not np.isclose(reconstructed_dt, dt, atol=1e-12, rtol=1e-9):
+        raise ValueError(
+            "Double-pendulum rollout dt must be an integer multiple of the model timestep. "
+            f"Got dt={dt} and model_timestep={substep_dt}."
+        )
+
+    parameter_vector = ca.DM(params)
+    current_state = ca.DM(state_vector)
+    control_dm = ca.DM([control])
+    for _ in range(substeps_per_step):
+        current_state = double_pendulum_dynamics_step(
+            x=current_state,
+            u=control_dm,
+            dt=substep_dt,
+            params=parameter_vector,
+            integration_method="rk4",
+        )
+    return np.asarray(current_state.full().ravel(), dtype=np.float64), substeps_per_step
 
 
 def metrics_to_dict(metrics: TrajectoryMetrics) -> dict[str, Any]:

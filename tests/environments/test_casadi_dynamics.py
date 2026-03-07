@@ -19,6 +19,7 @@ from src.utils.trajectory_comparison import (
     rollout_double_pendulum_gym,
     rollout_single_pendulum_casadi,
     rollout_single_pendulum_gym,
+    step_double_pendulum_casadi,
 )
 
 
@@ -153,4 +154,49 @@ def test_double_pendulum_controlled_rollout_matches_gym_on_short_horizon(tmp_pat
         candidate=casadi_rollout,
         max_threshold=0.18,
         rmse_threshold=0.05,
+    )
+
+
+def test_double_pendulum_free_one_step_predictions_stay_close_on_long_horizon(
+    tmp_path: Path,
+) -> None:
+    initial_state = np.array([0.0, 0.1, -0.1, 0.0, 0.0, 0.0], dtype=np.float64)
+    control_sequence = np.zeros(80, dtype=np.float64)
+    gym_rollout = rollout_double_pendulum_gym(
+        initial_state=initial_state,
+        control_sequence=control_sequence,
+    )
+    predicted_states = np.zeros_like(gym_rollout.states[1:])
+    for index, control in enumerate(control_sequence):
+        predicted_states[index], _ = step_double_pendulum_casadi(
+            state=gym_rollout.states[index],
+            control=float(control),
+            dt=gym_rollout.dt,
+        )
+
+    metrics = compute_trajectory_metrics(gym_rollout.states[1:], predicted_states)
+    if metrics.overall_max_abs_error <= 0.12 and metrics.overall_rmse <= 0.025:
+        return
+
+    csv_path = tmp_path / "double_pendulum_free_one_step_long_horizon.csv"
+    header = [
+        "step",
+        *[f"ref_{label}" for label in gym_rollout.state_labels],
+        *[f"cand_{label}" for label in gym_rollout.state_labels],
+    ]
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        import csv
+
+        writer = csv.writer(handle)
+        writer.writerow(header)
+        for step, (reference_row, candidate_row) in enumerate(
+            zip(gym_rollout.states[1:], predicted_states, strict=True),
+            start=1,
+        ):
+            writer.writerow([step, *reference_row.tolist(), *candidate_row.tolist()])
+
+    summary = format_metrics_summary(metrics, gym_rollout.state_labels)
+    pytest.fail(
+        "double_pendulum_free_one_step_long_horizon exceeded thresholds "
+        f"max<=0.12 and rmse<=0.025. Observed {summary}. Artifact: {csv_path}"
     )

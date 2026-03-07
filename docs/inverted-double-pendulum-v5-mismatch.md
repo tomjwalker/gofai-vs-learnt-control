@@ -59,7 +59,12 @@ After fixing the timestep, stepping, state-convention, and stale-parameter misma
 - short-horizon free rollouts dropped to about `0.09` max absolute error and about `0.023` overall RMSE
 - short-horizon controlled rollouts dropped to about `0.16` max absolute error and about `0.033` overall RMSE
 
-There is still some longer-horizon drift between Gymnasium and the symbolic model. At this point that remaining drift looks like a genuine model-physics discrepancy, not the original comparison bug.
+There is still some longer-horizon drift between Gymnasium and the symbolic model. After the fix, two diagnostics help interpret it:
+
+- In free evolution, a tiny perturbation of about `1e-4 rad` to the initial Gymnasium angle causes visible divergence by roughly `1.5 s`, which shows the system is sensitive enough for small local errors to amplify quickly.
+- If CasADi is re-initialized from the exact Gymnasium state at every free-evolution step and asked to predict only the next step, the one-step error stays small over the full `4 s` horizon.
+
+So the remaining free-response drift now looks much more like chaotic amplification of small local discrepancies than another large interface bug.
 
 ## What to change in lecture notes
 
