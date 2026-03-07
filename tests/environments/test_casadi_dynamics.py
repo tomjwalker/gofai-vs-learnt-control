@@ -261,3 +261,24 @@ def test_double_pendulum_controlled_one_step_predictions_stay_close_before_slide
         "double_pendulum_controlled_one_step_prelimit exceeded thresholds "
         f"max<=0.09 and rmse<=0.02. Observed {summary}. Artifact: {csv_path}"
     )
+
+
+def test_double_pendulum_casadi_rollout_keeps_cart_within_slider_limits() -> None:
+    _params, _dt, joint_limits = load_double_pendulum_params(
+        "src/environments/double_pendulum_params.json"
+    )
+    assert joint_limits is not None and "x" in joint_limits
+    lower_limit, upper_limit = joint_limits["x"]
+
+    initial_state = np.array([0.0, 0.1, -0.1, 0.0, 0.0, 0.0], dtype=np.float64)
+    control_sequence = np.concatenate(
+        [np.full(40, -0.1, dtype=np.float64), np.full(40, 0.1, dtype=np.float64)]
+    )
+    casadi_rollout = rollout_double_pendulum_casadi(
+        initial_state=initial_state,
+        control_sequence=control_sequence,
+        dt=0.05,
+    )
+
+    assert np.all(casadi_rollout.states[:, 0] >= lower_limit)
+    assert np.all(casadi_rollout.states[:, 0] <= upper_limit)

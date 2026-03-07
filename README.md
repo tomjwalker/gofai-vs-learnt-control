@@ -94,3 +94,4 @@ Useful optional flags for both scripts:
 - The double pendulum now matches closely on short horizons and in one-step prediction tests.
 - Longer free `IDP` rollouts can still diverge because the system is highly sensitive to small local differences.
 - Longer controlled `IDP` rollouts will also diverge once the cart reaches the slider limit at about `x = +/-1`, because MuJoCo then applies joint-limit constraint forces that are not included in the current symbolic model.
+- The CasADi `IDP` rollout now clips the cart to the slider limits as a simple guard, but that is only a teaching-friendly approximation of the true end-stop physics.

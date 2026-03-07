@@ -297,6 +297,10 @@ def main() -> None:
                 "Beyond that point MuJoCo includes joint-limit constraint forces "
                 "that are not modeled in the current symbolic dynamics."
             )
+            print(
+                "The CasADi rollout now clips the cart to the slider limits as a simple guard, "
+                "but it still does not reproduce MuJoCo's true end-stop forces."
+            )
 
     artifacts = dump_comparison_artifacts(
         args.artifact_dir,

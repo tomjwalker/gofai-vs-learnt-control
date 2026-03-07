@@ -68,6 +68,8 @@ So the remaining free-response drift now looks much more like chaotic amplificat
 
 For the default open-loop controlled comparison, the story is different. The cart reaches the slider rail limit at about `t = 1.0 s`, after which MuJoCo introduces joint-limit constraint forces. Those end-stop forces are not part of the current symbolic model, so long-horizon controlled rollouts diverge once the cart starts pushing into the rail boundary. Before the first slider-limit hit, one-step controlled predictions remain close.
 
+As a pragmatic guard for demos, the CasADi rollout now clips the cart position to the slider limits and zeroes cart velocity when the cart would otherwise leave the rail. That keeps the state inside the physical range, but it is still only an approximation of the true MuJoCo end-stop behavior.
+
 ## What to change in lecture notes
 
 If your notes describe the double pendulum using the Gymnasium/MuJoCo raw state directly, they should make this distinction explicit:

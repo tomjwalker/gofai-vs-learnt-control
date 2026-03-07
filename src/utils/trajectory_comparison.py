@@ -327,9 +327,10 @@ def step_double_pendulum_casadi(
     dt: float,
     param_path: str = "src/environments/double_pendulum_params.json",
     integration_timestep: float | None = None,
+    enforce_cart_position_limits: bool = True,
 ) -> tuple[FloatArray, int]:
     state_vector = _coerce_vector(state, name="state")
-    params, model_timestep, _joint_limits = load_double_pendulum_params(param_path)
+    params, model_timestep, joint_limits = load_double_pendulum_params(param_path)
     if params is None or model_timestep is None:
         raise ValueError(f"Could not load double-pendulum parameters from {param_path}.")
     substep_dt = model_timestep if integration_timestep is None else float(integration_timestep)
@@ -352,6 +353,7 @@ def step_double_pendulum_casadi(
     parameter_vector = ca.DM(params)
     current_state = ca.DM(state_vector)
     control_dm = ca.DM([control])
+    x_limits = joint_limits.get("x") if joint_limits is not None else None
     for _ in range(substeps_per_step):
         current_state = double_pendulum_dynamics_step(
             x=current_state,
@@ -360,6 +362,13 @@ def step_double_pendulum_casadi(
             params=parameter_vector,
             integration_method="rk4",
         )
+        if enforce_cart_position_limits and x_limits is not None and len(x_limits) == 2:
+            current_state_array = np.asarray(current_state.full().ravel(), dtype=np.float64)
+            clipped_position = np.clip(current_state_array[0], x_limits[0], x_limits[1])
+            if clipped_position != current_state_array[0]:
+                current_state_array[0] = clipped_position
+                current_state_array[3] = 0.0
+                current_state = ca.DM(current_state_array)
     return np.asarray(current_state.full().ravel(), dtype=np.float64), substeps_per_step
 
 
