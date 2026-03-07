@@ -91,4 +91,6 @@ Useful optional flags for both scripts:
 - The single pendulum uses `dt = 0.04 s`, so `100` steps is about `4` seconds.
 - The double pendulum uses `dt = 0.05 s`, so `80` steps is about `4` seconds.
 - The single pendulum should remain visually aligned over the full comparison horizon.
-- The double pendulum now matches closely on short horizons and in one-step prediction tests. Longer free rollouts can still diverge because the system is highly sensitive to small local differences.
+- The double pendulum now matches closely on short horizons and in one-step prediction tests.
+- Longer free `IDP` rollouts can still diverge because the system is highly sensitive to small local differences.
+- Longer controlled `IDP` rollouts will also diverge once the cart reaches the slider limit at about `x = +/-1`, because MuJoCo then applies joint-limit constraint forces that are not included in the current symbolic model.

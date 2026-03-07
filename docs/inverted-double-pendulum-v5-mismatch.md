@@ -66,6 +66,8 @@ There is still some longer-horizon drift between Gymnasium and the symbolic mode
 
 So the remaining free-response drift now looks much more like chaotic amplification of small local discrepancies than another large interface bug.
 
+For the default open-loop controlled comparison, the story is different. The cart reaches the slider rail limit at about `t = 1.0 s`, after which MuJoCo introduces joint-limit constraint forces. Those end-stop forces are not part of the current symbolic model, so long-horizon controlled rollouts diverge once the cart starts pushing into the rail boundary. Before the first slider-limit hit, one-step controlled predictions remain close.
+
 ## What to change in lecture notes
 
 If your notes describe the double pendulum using the Gymnasium/MuJoCo raw state directly, they should make this distinction explicit:

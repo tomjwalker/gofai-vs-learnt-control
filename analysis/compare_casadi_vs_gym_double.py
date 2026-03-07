@@ -44,6 +44,18 @@ def _load_link_lengths(param_path: str) -> tuple[float, float]:
     return float(mapping["l1"]), float(mapping["l2"])
 
 
+def _first_limit_hit_step(
+    states: np.ndarray,
+    *,
+    lower_limit: float,
+    upper_limit: float,
+) -> int | None:
+    for index, position in enumerate(states[:, 0]):
+        if position <= lower_limit or position >= upper_limit:
+            return index
+    return None
+
+
 def _compute_link_positions(
     state: np.ndarray,
     *,
@@ -262,6 +274,29 @@ def main() -> None:
     print(f"Gymnasium state convention: {gym_rollout.state_convention}")
     print(f"CasADi state convention: {casadi_rollout.state_convention}")
     print(summary)
+
+    _params, _dt, joint_limits, _mapping = load_double_pendulum_params(
+        PARAM_PATH,
+        return_mapping=True,
+    )
+    if joint_limits is not None and "x" in joint_limits:
+        lower_limit, upper_limit = joint_limits["x"]
+        first_hit_step = _first_limit_hit_step(
+            aligned_gym_states,
+            lower_limit=lower_limit,
+            upper_limit=upper_limit,
+        )
+        if first_hit_step is not None:
+            hit_time = first_hit_step * gym_rollout.dt
+            hit_position = aligned_gym_states[first_hit_step, 0]
+            print(
+                "Gym cart first reaches the slider limit at "
+                f"t={hit_time:.2f} s (x={hit_position:.3f})."
+            )
+            print(
+                "Beyond that point MuJoCo includes joint-limit constraint forces "
+                "that are not modeled in the current symbolic dynamics."
+            )
 
     artifacts = dump_comparison_artifacts(
         args.artifact_dir,

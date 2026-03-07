@@ -11,6 +11,7 @@ from src.environments.wrappers import (
     casadi_double_pendulum_to_gym_raw,
     gym_raw_double_pendulum_to_casadi,
 )
+from src.utils.parameters import load_double_pendulum_params
 from src.utils.trajectory_comparison import (
     compute_trajectory_metrics,
     dump_comparison_artifacts,
@@ -199,4 +200,64 @@ def test_double_pendulum_free_one_step_predictions_stay_close_on_long_horizon(
     pytest.fail(
         "double_pendulum_free_one_step_long_horizon exceeded thresholds "
         f"max<=0.12 and rmse<=0.025. Observed {summary}. Artifact: {csv_path}"
+    )
+
+
+def test_double_pendulum_controlled_one_step_predictions_stay_close_before_slider_limit(
+    tmp_path: Path,
+) -> None:
+    _params, _dt, joint_limits = load_double_pendulum_params(
+        "src/environments/double_pendulum_params.json"
+    )
+    assert joint_limits is not None and "x" in joint_limits
+    lower_limit = joint_limits["x"][0]
+
+    initial_state = np.array([0.0, 0.1, -0.1, 0.0, 0.0, 0.0], dtype=np.float64)
+    control_sequence = np.concatenate(
+        [np.full(40, -0.1, dtype=np.float64), np.full(40, 0.1, dtype=np.float64)]
+    )
+    gym_rollout = rollout_double_pendulum_gym(
+        initial_state=initial_state,
+        control_sequence=control_sequence,
+    )
+    first_limit_hit_index = next(
+        index for index, position in enumerate(gym_rollout.states[:, 0]) if position <= lower_limit
+    )
+    predicted_states = np.zeros(
+        (first_limit_hit_index - 1, gym_rollout.states.shape[1]),
+        dtype=np.float64,
+    )
+    reference_states = gym_rollout.states[1:first_limit_hit_index]
+    for index, control in enumerate(control_sequence[: first_limit_hit_index - 1]):
+        predicted_states[index], _ = step_double_pendulum_casadi(
+            state=gym_rollout.states[index],
+            control=float(control),
+            dt=gym_rollout.dt,
+        )
+
+    metrics = compute_trajectory_metrics(reference_states, predicted_states)
+    if metrics.overall_max_abs_error <= 0.09 and metrics.overall_rmse <= 0.02:
+        return
+
+    csv_path = tmp_path / "double_pendulum_controlled_one_step_prelimit.csv"
+    header = [
+        "step",
+        *[f"ref_{label}" for label in gym_rollout.state_labels],
+        *[f"cand_{label}" for label in gym_rollout.state_labels],
+    ]
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        import csv
+
+        writer = csv.writer(handle)
+        writer.writerow(header)
+        for step, (reference_row, candidate_row) in enumerate(
+            zip(reference_states, predicted_states, strict=True),
+            start=1,
+        ):
+            writer.writerow([step, *reference_row.tolist(), *candidate_row.tolist()])
+
+    summary = format_metrics_summary(metrics, gym_rollout.state_labels)
+    pytest.fail(
+        "double_pendulum_controlled_one_step_prelimit exceeded thresholds "
+        f"max<=0.09 and rmse<=0.02. Observed {summary}. Artifact: {csv_path}"
     )
