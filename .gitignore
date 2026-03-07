@@ -54,3 +54,7 @@ htmlcov/
 
 # Experiment results and logs
 runs/ 
+
+# Manim files
+media/
+
