@@ -6,13 +6,14 @@ The Gymnasium and CasADi trajectories for `InvertedDoublePendulum-v5` diverged b
 
 ## What the old version was assuming
 
-The old comparison path made three important assumptions that turned out to be wrong:
+The old comparison path made four important assumptions that turned out to be wrong:
 
 1. It hard-coded `frame_skip = 2` for the Gymnasium environment and therefore simulated the CasADi model with `dt = 0.02`.
-2. It treated the raw MuJoCo double-pendulum state as if the second angle and angular velocity were already absolute.
-3. In the analysis script, it imported `src/environments/double_pendulum_dynamics_copy.py` and, in control mode, scaled the control by the actuator gear before calling dynamics code that already applies the gear internally.
+2. Even after moving to Gymnasium's reported `dt = 0.05`, it advanced the CasADi model with one large RK4 step of `0.05` instead of reproducing MuJoCo's five internal `0.01` substeps.
+3. It treated the raw MuJoCo double-pendulum state as if the second angle and angular velocity were already absolute.
+4. The checked-in parameter JSON had stale cart-loss coefficients, with `b_slide = 500` and `b_fric = 500`, which are actuator-scale values and not the MuJoCo joint damping for the slider.
 
-Any one of these will distort the comparison. The first two were the main source of the big free-response mismatch.
+Any one of these will distort the comparison. The first and fourth were the biggest drivers of the catastrophic mismatch.
 
 ## What Gymnasium/MuJoCo actually does
 
@@ -40,24 +41,25 @@ And the inverse conversion is:
 
 ## Exact fix applied in the repo
 
-The fix was split into four parts:
+The fix was split into five parts:
 
 1. The double-pendulum wrapper now exposes one explicit state boundary.
    - `gym_raw` means raw MuJoCo `[x, q1, q2_rel, x_dot, q1_dot, q2_rel_dot]`
    - `casadi_absolute` means `[x, theta1_abs, theta2_abs, x_dot, theta1_dot_abs, theta2_dot_abs]`
 2. Wrapper reset and step now convert between these conventions explicitly instead of mixing them implicitly.
 3. The comparison harness now reads Gymnasium's real `dt` from the environment instead of hard-coding it.
-4. The comparison script now uses the canonical `src/environments/double_pendulum_dynamics.py` module rather than the stale duplicate copy.
+4. The CasADi rollout now reproduces Gymnasium's step semantics as five substeps of `0.01` rather than one large step of `0.05`.
+5. The symbolic parameter file now uses the actual slider damping from MuJoCo (`b_slide = 0.05`) and no extra cart-friction drag term (`b_fric = 0.0`) for this comparison path.
 
 ## What changed numerically
 
-After fixing the timestep and state-convention mismatch:
+After fixing the timestep, stepping, state-convention, and stale-parameter mismatch:
 
-- short-horizon free rollouts became close enough to use as regression tests
-- short-horizon controlled rollouts also became close enough to use in pytest
-- the catastrophic mismatch from the old plotting setup disappeared
+- the catastrophic `1e44` and `1e93` blow-ups disappeared
+- short-horizon free rollouts dropped to about `0.09` max absolute error and about `0.023` overall RMSE
+- short-horizon controlled rollouts dropped to about `0.16` max absolute error and about `0.033` overall RMSE
 
-There is still some longer-horizon drift between Gymnasium and the symbolic model. At this point that remaining drift looks like a genuine model-physics discrepancy, not the original interface bug.
+There is still some longer-horizon drift between Gymnasium and the symbolic model. At this point that remaining drift looks like a genuine model-physics discrepancy, not the original comparison bug.
 
 ## What to change in lecture notes
 
@@ -66,7 +68,8 @@ If your notes describe the double pendulum using the Gymnasium/MuJoCo raw state 
 - The raw simulator state stores the second hinge relative to the first hinge.
 - Absolute second-link angles only appear after a manual conversion.
 - The Gymnasium observation vector is feature-based (`sin/cos`) and is not the same thing as raw `qpos/qvel`.
-- The correct environment step for `InvertedDoublePendulum-v5` in this repo is `0.05 s`, not `0.02 s`.
+- One Gymnasium environment step is five MuJoCo internal steps of `0.01 s`, so matching Gym means reproducing those substeps rather than using one large `0.05 s` integrator step.
+- The slider damping in the MuJoCo model is `0.05`, not `500`, and the actuator gear should not be reused as a damping coefficient.
 
 A clean teaching convention is:
 

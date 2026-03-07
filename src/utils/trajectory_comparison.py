@@ -296,9 +296,24 @@ def rollout_double_pendulum_casadi(
 ) -> RolloutResult:
     initial_state_vector = _coerce_vector(initial_state, name="initial_state")
     controls = _coerce_control_sequence(control_sequence)
-    params, _model_timestep, _joint_limits = load_double_pendulum_params(param_path)
-    if params is None:
+    params, model_timestep, _joint_limits = load_double_pendulum_params(param_path)
+    if params is None or model_timestep is None:
         raise ValueError(f"Could not load double-pendulum parameters from {param_path}.")
+    if model_timestep <= 0.0:
+        raise ValueError(f"Model timestep must be positive, got {model_timestep}.")
+
+    substeps_per_step = int(round(dt / model_timestep))
+    if substeps_per_step <= 0:
+        raise ValueError(
+            f"Rollout dt={dt} must be at least one model timestep={model_timestep}."
+        )
+
+    reconstructed_dt = substeps_per_step * model_timestep
+    if not np.isclose(reconstructed_dt, dt, atol=1e-12, rtol=1e-9):
+        raise ValueError(
+            "Double-pendulum rollout dt must be an integer multiple of the model timestep. "
+            f"Got dt={dt} and model_timestep={model_timestep}."
+        )
 
     current_state = initial_state_vector.copy()
     parameter_vector = ca.DM(params)
@@ -306,18 +321,17 @@ def rollout_double_pendulum_casadi(
     states[0, :] = current_state
 
     for index, control in enumerate(controls, start=1):
-        current_state = np.asarray(
-            double_pendulum_dynamics_step(
-                x=ca.DM(current_state),
-                u=ca.DM([control]),
-                dt=dt,
+        current_state_dm = ca.DM(current_state)
+        control_dm = ca.DM([control])
+        for _ in range(substeps_per_step):
+            current_state_dm = double_pendulum_dynamics_step(
+                x=current_state_dm,
+                u=control_dm,
+                dt=model_timestep,
                 params=parameter_vector,
                 integration_method="rk4",
             )
-            .full()
-            .ravel(),
-            dtype=np.float64,
-        )
+        current_state = np.asarray(current_state_dm.full().ravel(), dtype=np.float64)
         states[index, :] = current_state
 
     return RolloutResult(
@@ -325,7 +339,7 @@ def rollout_double_pendulum_casadi(
         dt=float(dt),
         state_labels=_DOUBLE_STATE_LABELS,
         state_convention="casadi_absolute",
-        frame_skip=1,
+        frame_skip=substeps_per_step,
         truncated=False,
     )
 

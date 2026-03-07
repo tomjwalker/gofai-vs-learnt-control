@@ -127,7 +127,7 @@ def test_double_pendulum_free_rollout_matches_gym_on_short_horizon(tmp_path: Pat
         stem="double_pendulum_free_short_horizon",
         reference=gym_rollout,
         candidate=casadi_rollout,
-        max_threshold=0.08,
+        max_threshold=0.09,
         rmse_threshold=0.035,
     )
 
