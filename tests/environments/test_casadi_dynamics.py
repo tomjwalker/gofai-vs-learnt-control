@@ -1,138 +1,156 @@
-import sys
+from __future__ import annotations
+
 from pathlib import Path
+
+import gymnasium as gym
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
-import casadi as ca
 import pytest
-from src.utils.parameters import load_pendulum_params
-from src.environments.pendulum_dynamics import pendulum_dynamics
 
-# Add the project root to the Python path
-project_root = str(Path(__file__).parent.parent.parent)
-sys.path.append(project_root)
+from src.environments.wrappers import (
+    InvertedDoublePendulumComparisonWrapper,
+    casadi_double_pendulum_to_gym_raw,
+    gym_raw_double_pendulum_to_casadi,
+)
+from src.utils.trajectory_comparison import (
+    compute_trajectory_metrics,
+    dump_comparison_artifacts,
+    format_metrics_summary,
+    rollout_double_pendulum_casadi,
+    rollout_double_pendulum_gym,
+    rollout_single_pendulum_casadi,
+    rollout_single_pendulum_gym,
+)
 
-# Define the path to the parameters file (assuming it's accessible)
-PARAM_PATH = "src/environments/pendulum_params.json"
 
-def simulate_pendulum(initial_theta=0.1, dt=0.01, duration=5.0):
-    """
-    Simulate the pendulum dynamics without control input.
-    
-    Args:
-        initial_theta: Initial angle from vertical (radians). 
-                      Note: θ=0 is upward vertical (inverted position)
-        dt: Time step (seconds)
-        duration: Total simulation time (seconds)
-    """
-    # Define parameters (using standard cartpole values)
-    params = {
-        'cart_mass': 1.0,
-        'pole_mass': 0.1,
-        'pole_half_length': 0.5,
-        'pole_inertia_about_y': 0.0333,  # For a uniform rod: (1/12)*m*(2L)^2
-        'gravity': 9.81
-    }
-    
-    # Initial state: [x, theta, x_dot, theta_dot]
-    x0 = np.array([0.0, initial_theta, 0.0, 0.0])
-    
-    # Convert to CasADi symbolic variables
-    x = ca.SX.sym('x', 4)
-    u = ca.SX.sym('u', 1)
-    
-    # Create the dynamics function
-    f = ca.Function('f', [x, u], [pendulum_dynamics(x, u, dt, params)])
-    
-    # Simulate
-    n_steps = int(duration / dt)
-    states = np.zeros((n_steps, 4))
-    states[0] = x0
-    
-    for i in range(1, n_steps):
-        # No control input
-        states[i] = np.array(f(states[i-1], 0.0)).flatten()
-    
-    return states, dt
+def _assert_metrics_below_threshold(
+    *,
+    tmp_path: Path,
+    stem: str,
+    reference,
+    candidate,
+    max_threshold: float,
+    rmse_threshold: float,
+) -> None:
+    metrics = compute_trajectory_metrics(reference.states, candidate.states)
+    if metrics.overall_max_abs_error <= max_threshold and metrics.overall_rmse <= rmse_threshold:
+        return
 
-def plot_states(states, dt):
-    """Plot the state trajectories."""
-    time = np.arange(len(states)) * dt
-    
-    fig, axs = plt.subplots(2, 2, figsize=(12, 8))
-    fig.suptitle('Pendulum State Trajectories')
-    
-    # Position
-    axs[0, 0].plot(time, states[:, 0])
-    axs[0, 0].set_title('Cart Position (x)')
-    axs[0, 0].set_xlabel('Time (s)')
-    axs[0, 0].set_ylabel('Position (m)')
-    
-    # Angle
-    axs[0, 1].plot(time, states[:, 1])
-    axs[0, 1].set_title('Pole Angle (θ)')
-    axs[0, 1].set_xlabel('Time (s)')
-    axs[0, 1].set_ylabel('Angle (rad)')
-    
-    # Velocity
-    axs[1, 0].plot(time, states[:, 2])
-    axs[1, 0].set_title('Cart Velocity (x_dot)')
-    axs[1, 0].set_xlabel('Time (s)')
-    axs[1, 0].set_ylabel('Velocity (m/s)')
-    
-    # Angular velocity
-    axs[1, 1].plot(time, states[:, 3])
-    axs[1, 1].set_title('Pole Angular Velocity (θ_dot)')
-    axs[1, 1].set_xlabel('Time (s)')
-    axs[1, 1].set_ylabel('Angular Velocity (rad/s)')
-    
-    plt.tight_layout()
-    plt.show()
+    artifacts = dump_comparison_artifacts(tmp_path, stem, reference, candidate, metrics)
+    summary = format_metrics_summary(metrics, reference.state_labels)
+    pytest.fail(
+        f"{stem} exceeded thresholds max<={max_threshold} and rmse<={rmse_threshold}. "
+        f"Observed {summary}. Artifacts: {artifacts.csv_path}, {artifacts.json_path}"
+    )
 
-def animate_pendulum(states, dt):
-    """Create an animation of the pendulum."""
-    fig, ax = plt.subplots(figsize=(8, 6))
-    
-    # Set up the plot
-    ax.set_xlim(-2, 2)
-    ax.set_ylim(-1, 1)
-    ax.set_aspect('equal')
-    ax.grid(True)
-    
-    # Create the cart and pole
-    cart_width = 0.2
-    cart_height = 0.1
-    pole_length = 1.0  # Full length
-    
-    cart = plt.Rectangle((0, 0), cart_width, cart_height, fill=True)
-    pole, = ax.plot([], [], 'b-', linewidth=2)
-    ax.add_patch(cart)
-    
-    def update(frame):
-        x = states[frame, 0]
-        theta = states[frame, 1]
-        
-        # Update cart position
-        cart.set_xy((x - cart_width/2, -cart_height/2))
-        
-        # Update pole position - note: theta=0 is upward vertical
-        pole_x = [x, x + pole_length * np.sin(theta)]
-        pole_y = [0, pole_length * np.cos(theta)]  # Changed sign here
-        pole.set_data(pole_x, pole_y)
-        
-        return cart, pole
-    
-    anim = FuncAnimation(fig, update, frames=len(states),
-                        interval=dt*1000, blit=True)
-    plt.show()
-    return anim
 
-if __name__ == "__main__":
-    # Simulate with a small initial angle
-    states, dt = simulate_pendulum(initial_theta=0.1, dt=0.01, duration=5.0)
-    
-    # Plot the states
-    plot_states(states, dt)
-    
-    # Create animation
-    anim = animate_pendulum(states, dt) 
+def test_double_pendulum_state_conversion_round_trip() -> None:
+    casadi_state = np.array([0.0, 0.1, -0.1, 0.0, 0.2, -0.3], dtype=np.float64)
+    raw_state = casadi_double_pendulum_to_gym_raw(casadi_state)
+    round_trip = gym_raw_double_pendulum_to_casadi(raw_state)
+    np.testing.assert_allclose(raw_state, np.array([0.0, 0.1, -0.2, 0.0, 0.2, -0.5]))
+    np.testing.assert_allclose(round_trip, casadi_state)
+
+
+def test_double_pendulum_wrapper_reset_matches_raw_mujoco_state() -> None:
+    initial_state = np.array([0.0, 0.1, -0.1, 0.0, 0.2, -0.3], dtype=np.float64)
+    expected_raw_state = casadi_double_pendulum_to_gym_raw(initial_state)
+    env = InvertedDoublePendulumComparisonWrapper(
+        gym.make("InvertedDoublePendulum-v5"),
+        return_state_convention="gym_raw",
+    )
+    try:
+        observation, _ = env.reset(
+            initial_state=initial_state,
+            initial_state_convention="casadi_absolute",
+        )
+        raw_state = np.concatenate([env.unwrapped.data.qpos.copy(), env.unwrapped.data.qvel.copy()])
+        native_observation = env.unwrapped._get_obs()
+    finally:
+        env.close()
+
+    np.testing.assert_allclose(observation, expected_raw_state)
+    np.testing.assert_allclose(raw_state, expected_raw_state)
+    np.testing.assert_allclose(native_observation[0], expected_raw_state[0])
+    np.testing.assert_allclose(native_observation[1], np.sin(expected_raw_state[1]))
+    np.testing.assert_allclose(native_observation[2], np.sin(expected_raw_state[2]))
+    np.testing.assert_allclose(native_observation[3], np.cos(expected_raw_state[1]))
+    np.testing.assert_allclose(native_observation[4], np.cos(expected_raw_state[2]))
+    np.testing.assert_allclose(native_observation[5:8], expected_raw_state[3:6])
+
+
+def test_double_pendulum_environment_reports_actual_dt() -> None:
+    env = InvertedDoublePendulumComparisonWrapper(gym.make("InvertedDoublePendulum-v5"))
+    try:
+        expected_dt = float(env.unwrapped.model.opt.timestep * env.unwrapped.frame_skip)
+        assert env.unwrapped.dt == pytest.approx(expected_dt)
+        assert env.unwrapped.frame_skip == 5
+    finally:
+        env.close()
+
+
+def test_single_pendulum_rollout_matches_gym_baseline(tmp_path: Path) -> None:
+    initial_state = np.array([0.0, 0.1, 0.0, 0.0], dtype=np.float64)
+    control_sequence = np.zeros(25, dtype=np.float64)
+    gym_rollout = rollout_single_pendulum_gym(
+        initial_state=initial_state,
+        control_sequence=control_sequence,
+    )
+    casadi_rollout = rollout_single_pendulum_casadi(
+        initial_state=initial_state,
+        control_sequence=control_sequence,
+        dt=gym_rollout.dt,
+    )
+    _assert_metrics_below_threshold(
+        tmp_path=tmp_path,
+        stem="single_pendulum_free",
+        reference=gym_rollout,
+        candidate=casadi_rollout,
+        max_threshold=0.08,
+        rmse_threshold=0.03,
+    )
+
+
+def test_double_pendulum_free_rollout_matches_gym_on_short_horizon(tmp_path: Path) -> None:
+    initial_state = np.array([0.0, 0.1, -0.1, 0.0, 0.0, 0.0], dtype=np.float64)
+    control_sequence = np.zeros(10, dtype=np.float64)
+    gym_rollout = rollout_double_pendulum_gym(
+        initial_state=initial_state,
+        control_sequence=control_sequence,
+    )
+    casadi_rollout = rollout_double_pendulum_casadi(
+        initial_state=initial_state,
+        control_sequence=control_sequence,
+        dt=gym_rollout.dt,
+    )
+    _assert_metrics_below_threshold(
+        tmp_path=tmp_path,
+        stem="double_pendulum_free_short_horizon",
+        reference=gym_rollout,
+        candidate=casadi_rollout,
+        max_threshold=0.08,
+        rmse_threshold=0.035,
+    )
+
+
+def test_double_pendulum_controlled_rollout_matches_gym_on_short_horizon(tmp_path: Path) -> None:
+    initial_state = np.array([0.0, 0.1, -0.1, 0.0, 0.0, 0.0], dtype=np.float64)
+    control_sequence = np.concatenate(
+        [np.full(5, -0.1, dtype=np.float64), np.full(5, 0.1, dtype=np.float64)]
+    )
+    gym_rollout = rollout_double_pendulum_gym(
+        initial_state=initial_state,
+        control_sequence=control_sequence,
+    )
+    casadi_rollout = rollout_double_pendulum_casadi(
+        initial_state=initial_state,
+        control_sequence=control_sequence,
+        dt=gym_rollout.dt,
+    )
+    _assert_metrics_below_threshold(
+        tmp_path=tmp_path,
+        stem="double_pendulum_controlled_short_horizon",
+        reference=gym_rollout,
+        candidate=casadi_rollout,
+        max_threshold=0.18,
+        rmse_threshold=0.05,
+    )

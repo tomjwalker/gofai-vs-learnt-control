@@ -1,137 +1,125 @@
+from __future__ import annotations
+
 import json
-import numpy as np
+from pathlib import Path
+from typing import Any, TypeAlias
+
+PendulumParams: TypeAlias = dict[str, Any]
+JointLimits: TypeAlias = dict[str, list[float]]
+DoublePendulumParams: TypeAlias = list[float]
+DoublePendulumLoadResult: TypeAlias = tuple[
+    DoublePendulumParams | None,
+    float | None,
+    JointLimits | None,
+]
+DoublePendulumLoadResultWithMapping: TypeAlias = tuple[
+    DoublePendulumParams | None,
+    float | None,
+    JointLimits | None,
+    PendulumParams | None,
+]
+_DOUBLE_PENDULUM_PARAM_ORDER = [
+    "M",
+    "m1",
+    "m2",
+    "l1",
+    "l2",
+    "d1",
+    "d2",
+    "Icm1",
+    "Icm2",
+    "g",
+    "b_slide",
+    "b_fric",
+    "b_joint1",
+    "b_joint2",
+    "gear",
+]
 
 
-def load_pendulum_params(json_file="pendulum_params.json"):
-    """
-    Loads the environment parameters for the InvertedPendulum
-    that were previously saved to JSON.
-    Returns them as a Python dictionary, possibly with
-    additional interpretation or checks.
+def _read_json_mapping(json_file: str | Path) -> PendulumParams:
+    path = Path(json_file)
+    with path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError(f"Expected a JSON object in {path}, got {type(payload).__name__}.")
+    return payload
 
-    :param json_file: Path to the JSON file
-    :return: Dictionary containing {cart_mass, pole_mass, pole_length, ...}
-    """
-    with open(json_file, "r") as f:
-        params = json.load(f)
 
-    # Optional: Provide some fallback or computed fields
-    # For instance, if 'pole_length' wasn't saved, we can compute from 'pole_half_length'
+def load_pendulum_params(
+    json_file: str | Path = "pendulum_params.json",
+    *,
+    verbose: bool = False,
+) -> PendulumParams:
+    """Load scalar and bounds parameters for the single inverted pendulum."""
+    params = _read_json_mapping(json_file)
     if params.get("pole_length") is None and params.get("pole_half_length") is not None:
-        params["pole_length"] = 2.0 * params["pole_half_length"]
+        params["pole_length"] = 2.0 * float(params["pole_half_length"])
 
-    # Additional checks or logging
-    print(f"Loaded Inverted Pendulum parameters from '{json_file}':")
-    for k, v in params.items():
-        print(f"  {k} = {v}")
+    if verbose:
+        print(f"Loaded Inverted Pendulum parameters from '{json_file}':")
+        for key, value in params.items():
+            print(f"  {key} = {value}")
 
-    # Return the dictionary for further usage
     return params
 
 
 def load_double_pendulum_params(
-    json_file="src/environments/double_pendulum_params.json",
-    return_mapping=False # Flag to return the full mapping dict
-):
-    """
-    Loads parameters for InvertedDoublePendulum from JSON.
-
-    Returns:
-        tuple: 
-            - list[float] | None: Ordered list of numerical parameters.
-            - float | None: Timestep dt.
-            - dict | None: Joint limits dictionary (e.g., {'x': [-1, 1], ...}).
-            - dict | None: The symbolic_params_mapping dict (only if return_mapping=True).
-    """
+    json_file: str | Path = "src/environments/double_pendulum_params.json",
+    *,
+    return_mapping: bool = False,
+    verbose: bool = False,
+) -> DoublePendulumLoadResult | DoublePendulumLoadResultWithMapping:
+    """Load ordered model parameters, model timestep, and joint limits for the double pendulum."""
+    path = Path(json_file)
     try:
-        with open(json_file, "r") as f:
-            all_params = json.load(f)
+        all_params = _read_json_mapping(path)
     except FileNotFoundError:
-        print(f"Error: Parameter file not found at {json_file}")
-        return (None,) * (4 if return_mapping else 3)
-    except json.JSONDecodeError as e:
-        print(f"Error decoding JSON from {json_file}: {e}")
-        return (None,) * (4 if return_mapping else 3)
+        if verbose:
+            print(f"Error: Parameter file not found at {path}")
+        return (None, None, None, None) if return_mapping else (None, None, None)
+    except (json.JSONDecodeError, ValueError) as error:
+        if verbose:
+            print(f"Error loading JSON from {path}: {error}")
+        return (None, None, None, None) if return_mapping else (None, None, None)
 
     symbolic_params = all_params.get("symbolic_params_mapping")
-    if symbolic_params is None:
-        print(f"Error: 'symbolic_params_mapping' key not found in {json_file}")
-        return (None,) * (4 if return_mapping else 3)
-        
-    joint_limits = symbolic_params.get("joint_limits")
-    if joint_limits is None:
-        print(f"Warning: 'joint_limits' key not found in symbolic_params_mapping.")
-        # Return empty dict to avoid downstream errors, but signal issue
-        joint_limits = {}
-        
-    # --- Define the exact order required by the CasADi function ---
-    param_order = [
-        'M', 'm1', 'm2', 'l1', 'l2', 'd1', 'd2', 'Icm1', 'Icm2', 'g',
-        'b_slide', 'b_fric', 'b_joint1', 'b_joint2', 'gear'
-    ]
-    n_expected_params = len(param_order)
-    ordered_param_list = []
-    missing_keys = []
-    for key in param_order:
-        value = symbolic_params.get(key)
-        if value is None: missing_keys.append(key)
-        elif not isinstance(value, (int, float)):
-            try: value = float(value)
-            except (ValueError, TypeError): 
-                print(f"Error converting param '{key}'='{value}'."); missing_keys.append(key); value = None
-        if value is not None: ordered_param_list.append(value)
-        
-    if missing_keys: 
-        print(f"Error: Missing params: {missing_keys}"); 
-        return (None,) * (4 if return_mapping else 3)
-    if len(ordered_param_list) != n_expected_params: 
-        print(f"Error: Param count mismatch ({len(ordered_param_list)} vs {n_expected_params})."); 
-        return (None,) * (4 if return_mapping else 3)
-         
-    dt = float(symbolic_params.get('dt', 0.01))
+    if not isinstance(symbolic_params, dict):
+        if verbose:
+            print(f"Error: 'symbolic_params_mapping' missing from {path}.")
+        return (None, None, None, None) if return_mapping else (None, None, None)
 
-    print(f"Successfully extracted {len(ordered_param_list)} parameters, dt={dt}, and joint limits.")
-    
+    ordered_param_list: list[float] = []
+    missing_keys: list[str] = []
+    for key in _DOUBLE_PENDULUM_PARAM_ORDER:
+        value = symbolic_params.get(key)
+        if value is None:
+            missing_keys.append(key)
+            continue
+        try:
+            ordered_param_list.append(float(value))
+        except (TypeError, ValueError):
+            missing_keys.append(key)
+
+    if missing_keys:
+        if verbose:
+            print(f"Error: Missing or invalid double-pendulum parameters: {missing_keys}")
+        return (None, None, None, None) if return_mapping else (None, None, None)
+
+    dt = float(symbolic_params.get("dt", 0.01))
+    raw_joint_limits = symbolic_params.get("joint_limits", {})
+    joint_limits: JointLimits = {}
+    if isinstance(raw_joint_limits, dict):
+        for key, value in raw_joint_limits.items():
+            if isinstance(value, list) and len(value) == 2:
+                joint_limits[key] = [float(value[0]), float(value[1])]
+
+    if verbose:
+        print(
+            "Successfully extracted "
+            f"{len(ordered_param_list)} double-pendulum parameters, dt={dt}, and joint limits."
+        )
+
     if return_mapping:
         return ordered_param_list, dt, joint_limits, symbolic_params
-    else:
-        return ordered_param_list, dt, joint_limits
-
-
-if __name__ == "__main__":
-    # Example usage / test
-    print("--- Testing Parameter Loading --- ")
-    # --- Single Pendulum --- 
-    print("\nAttempting to load SINGLE pendulum params...")
-    try:
-        ip_params = load_pendulum_params("src/environments/pendulum_params.json")
-    except FileNotFoundError:
-        print(" -> Single Pendulum Parameters file not found.")
-    except Exception as e:
-        print(f" -> Error loading single pendulum params: {e}")
-
-    # --- Double Pendulum --- 
-    print("\nAttempting to load DOUBLE pendulum params...")
-    try:
-        # Test default return (list, dt, limits)
-        dp_params_list, dp_dt, dp_limits = load_double_pendulum_params(
-            "src/environments/double_pendulum_params.json", return_mapping=False
-        )
-        if dp_params_list is None:
-            print(" -> Failed to load Double Pendulum parameters/dt/limits.")
-        else:
-            print(f" -> Loaded {len(dp_params_list)} params, dt={dp_dt}, limits={dp_limits}.")
-        
-        # Test returning mapping dict as well
-        dp_params_list_2, dp_dt_2, dp_limits_2, dp_map = load_double_pendulum_params(
-             "src/environments/double_pendulum_params.json", return_mapping=True
-        )
-        if dp_map is None:
-             print(" -> Failed to load Double Pendulum mapping dict.")
-        else:
-             print(f" -> Successfully loaded mapping dict (contains {len(dp_map)} keys).")
-             
-    except Exception as e:
-        print(f" -> Error loading double pendulum params: {e}")
-        import traceback
-        traceback.print_exc()
+    return ordered_param_list, dt, joint_limits

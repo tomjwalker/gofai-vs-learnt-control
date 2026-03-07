@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gofai-vs-learnt-control"
+version = "0.1.0"
+description = "Control theory and reinforcement learning experiments for pendulum systems."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "casadi",
+    "dash",
+    "gymnasium[mujoco]",
+    "imageio",
+    "matplotlib",
+    "pillow",
+    "stable-baselines3",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "pytest-mock",
+    "ruff",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+extend-exclude = [
+    ".venv",
+    ".uv-cache",
+    ".uv-venv",
+    "analysis",
+    "manim",
+    "media",
+    "runs",
+    "scripts",
+    "sympy_models",
+    "src/environments/double_pendulum_dynamics_copy.py",
+    "src/environments/extract_params.py",
+    "src/environments/swing_up_envs",
+    "src/utils/plotting.py",
+]
+
+[tool.ruff.lint]
+select = [
+    "ANN",
+    "B",
+    "E",
+    "F",
+    "I",
+    "SIM",
+    "UP",
+]
+ignore = [
+    "ANN002",
+    "ANN003",
+    "ANN401",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["ANN001", "ANN201", "ANN202", "ANN204", "ANN205", "ANN206"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
